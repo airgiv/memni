@@ -15,43 +15,52 @@ export * from "./types";
 
 const COMMON_PHOTO_TYPES = ["image/jpeg", "image/png", "image/webp"];
 
+/*
+ * Hotel Lobby — built on the REAL source video supplied by the product owner.
+ * The licensed file is not committed to git: `npm run media:import -- <file>`
+ * cuts the fragment below into public/templates/hotel-lobby/ (gitignored):
+ * motion clip, original audio, example with sound, reference frame and a
+ * portrait cutout per person. Roles were marked once on the frame at 4.5 s
+ * of the fragment, where both faces are clearly visible.
+ */
+export const HOTEL_LOBBY_FRAGMENT = { startSec: 60.5, endSec: 70.5 };
+
 const hotelLobby: TemplateDef = {
   id: "hotel-lobby",
-  version: 1,
+  version: 2,
   kind: "main",
   title: "Hotel Lobby",
-  description: "Двое у микрофонов в холле отеля качают в такт. Нужны два человека.",
-  demoMaterials: true,
-  materialsNote:
-    "Заменить public/templates/hotel-lobby/{source.mp4,audio.m4a,example.mp4,frame.jpg} лицензированными материалами, заново разметить роли.",
-  durationSec: 8,
-  aspectRatio: "9:16",
+  description: "Двое у микрофона в студии.",
+  demoMaterials: false,
+  materialsNote: "Источник — видео владельца продукта; фрагмент 60,5–70,5 с. Импорт: npm run media:import -- <файл>.",
+  durationSec: 10,
+  aspectRatio: "16:9",
   media: {
     example: { src: "/templates/hotel-lobby/example.mp4", poster: "/templates/hotel-lobby/frame.jpg" },
-    source: { src: "/templates/hotel-lobby/source.mp4", startSec: 0, endSec: 8 },
-    audio: { src: "/templates/hotel-lobby/audio.m4a", startSec: 0, endSec: 8 },
-    referenceFrame: { src: "/templates/hotel-lobby/frame.jpg", width: 720, height: 1280, atSec: 0 },
+    source: { src: "/templates/hotel-lobby/source.mp4", startSec: 0, endSec: 10 },
+    audio: { src: "/templates/hotel-lobby/audio.m4a", startSec: 0, endSec: 10 },
+    referenceFrame: { src: "/templates/hotel-lobby/frame.jpg", width: 640, height: 360, atSec: 4.5 },
   },
   roles: [
     {
-      id: "mic-left",
-      name: "Слева у микрофона",
-      question: "Кто будет у микрофона слева?",
-      description: "Начинает куплет, стоит вполоборота к центру.",
-      region: { x: 0.05, y: 0.36, w: 0.42, h: 0.58 },
-      tone: "flame",
-      cutout: { src: "/templates/hotel-lobby/roles/mic-left.jpg", atSec: 2.0 },
-      promptRole: "the performer standing on the LEFT side at the left microphone stand, turned slightly toward the centre",
+      id: "left",
+      name: "Слева",
+      question: "Кто будет слева?",
+      description: "В полосатой рубашке.",
+      region: { x: 0.12, y: 0.04, w: 0.36, h: 0.96 },
+      tone: "sky",
+      cutout: { src: "/templates/hotel-lobby/roles/left.jpg", atSec: 4.5 },
+      promptRole: "the performer on the LEFT, in the striped short-sleeve shirt, next to the studio microphone",
     },
     {
-      id: "mic-right",
-      name: "Справа у микрофона",
-      question: "Кто будет у микрофона справа?",
-      description: "Подхватывает припев, стоит ближе к стойке ресепшена.",
-      region: { x: 0.53, y: 0.36, w: 0.42, h: 0.58 },
-      tone: "blue",
-      cutout: { src: "/templates/hotel-lobby/roles/mic-right.jpg", atSec: 2.0 },
-      promptRole: "the performer standing on the RIGHT side at the right microphone stand, near the reception desk",
+      id: "right",
+      name: "Справа",
+      question: "Кто будет справа?",
+      description: "В оранжевой рубашке.",
+      region: { x: 0.52, y: 0.04, w: 0.36, h: 0.96 },
+      tone: "flame",
+      cutout: { src: "/templates/hotel-lobby/roles/right.jpg", atSec: 4.5 },
+      promptRole: "the performer on the RIGHT, in the orange knit short-sleeve shirt",
     },
   ],
   photoRequirements: {
@@ -60,33 +69,15 @@ const hotelLobby: TemplateDef = {
     maxPhotos: 6,
     minSidePx: 512,
     acceptedTypes: COMMON_PHOTO_TYPES,
-    tips: [
-      "Лицо целиком, без тёмных очков и масок",
-      "Для этого ролика лучше фото по пояс — видно плечи и руки",
-      "Ровный дневной свет, без сильных фильтров",
-      "Один человек в кадре — других лучше обрезать",
-    ],
+    tips: [],
   },
   look: {
     clothingModes: ["template", "photo", "preset"],
     defaultClothing: "template",
-    templateOutfit: {
-      label: "Одежда из ролика",
-      prompt: "an oversized tracksuit with a chunky chain, as in the original scene",
-    },
+    templateOutfit: { label: "Из видео", prompt: "the same outfit this performer wears in the reference video" },
     presets: [
-      {
-        id: "suit",
-        label: "Костюм",
-        description: "Тёмный костюм, светлая рубашка",
-        prompt: "a dark tailored suit with a light shirt, no tie",
-      },
-      {
-        id: "robe",
-        label: "Халат",
-        description: "Белый махровый халат и тапочки",
-        prompt: "a white terry hotel bathrobe",
-      },
+      { id: "suit", label: "Костюм", description: "", prompt: "a dark tailored suit with a light shirt, no tie" },
+      { id: "robe", label: "Халат", description: "", prompt: "a white terry hotel bathrobe" },
     ],
     glassesOption: false,
     appearanceNoteMaxLength: 160,
@@ -95,25 +86,18 @@ const hotelLobby: TemplateDef = {
     options: [
       {
         id: "faithful",
-        label: "Максимально близко к оригиналу",
-        description: "Тот же холл, свет и позы. Меняются только люди.",
-        prompt: "Keep the hotel lobby, lighting, camera angle and poses exactly as in the reference frame.",
-      },
-      {
-        id: "matching-outfits",
-        label: "Одинаковые костюмы",
-        description: "Оба участника в одинаковых костюмах шаблона — одежда из образов не учитывается.",
-        prompt: "Both performers wear identical oversized tracksuits with chunky chains.",
-        overridesClothing: true,
+        label: "Как в видео",
+        description: "",
+        prompt: "Keep the orange studio background, the hanging microphone, the lighting, camera angle and poses exactly as in the reference frame.",
       },
     ],
     defaultOption: "faithful",
   },
   pipeline: {
-    promptVersion: "hotel-lobby/2026-09-b",
+    promptVersion: "hotel-lobby/2026-09-c",
     video: { needsMotionReference: true, needsImageReference: true, wantsPerPersonReferences: true },
   },
-  provider: { klingCharacterOrientation: "video", maxVideoDurationSec: 10 },
+  provider: { klingCharacterOrientation: "video", maxVideoDurationSec: 30 },
   price: { amountMinor: 9900, currency: "RUB", isExample: true },
 };
 
@@ -263,7 +247,14 @@ const trio: TemplateDef = {
   price: null,
 };
 
-export const TEMPLATES: TemplateDef[] = [hotelLobby, morningShow, trio];
+/** The catalog: only real, working templates. */
+export const TEMPLATES: TemplateDef[] = [hotelLobby];
+
+/**
+ * Drawn one- and three-person examples. Not listed in the catalog (no real
+ * video yet); kept to prove that any number of roles works (see tests).
+ */
+export const EXAMPLE_TEMPLATES: TemplateDef[] = [morningShow, trio];
 
 export function getTemplate(id: string): TemplateDef | undefined {
   return TEMPLATES.find((t) => t.id === id);

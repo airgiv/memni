@@ -12,8 +12,15 @@ import { tmpdir } from "node:os";
 import sharp from "sharp";
 import type { Job } from "../../domain/types";
 import { getStorage } from "../../server/storage";
-import { runFfmpeg } from "../../server/media";
+import { ffprobeBin, runFfmpeg } from "../../server/media";
 import type { VideoProvider, VideoStatus, VideoSubmitRequest } from "./types";
+
+async function probeSize(file: string): Promise<{ width: number; height: number } | null> {
+  const { execFileSync } = await import("node:child_process");
+  const out = execFileSync(ffprobeBin(), ["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height", "-of", "json", file]).toString();
+  const st = JSON.parse(out).streams?.[0];
+  return st ? { width: st.width, height: st.height } : null;
+}
 
 const QUEUE_MS = 3000;
 const RUN_MS = 7000;
@@ -70,10 +77,15 @@ export class DemoVideoProvider implements VideoProvider {
       const src = join(process.cwd(), "public", job.input.sourceVideo.src);
       const badge = join(process.cwd(), "public", "demo", "badge-video.png");
       const out = join(dir, "raw.mp4");
+      // sizes follow the source frame (the real Hotel Lobby clip is 640×360)
+      const { height = 360 } = (await probeSize(src)) ?? {};
+      const insetH = Math.round(height * 0.34);
+      const badgeH = Math.max(18, Math.round(height * 0.07));
+      const pad = Math.round(height * 0.04);
       await runFfmpeg([
         "-i", src, "-i", inset, "-i", badge,
         "-filter_complex",
-        "[1:v]scale=240:-2[s];[0:v][s]overlay=W-w-24:H-h-24[v1];[v1][2:v]overlay=24:H-h-300[v]",
+        `[1:v]scale=-2:${insetH}[s];[2:v]scale=-2:${badgeH}[b];[0:v][s]overlay=W-w-${pad}:H-h-${pad}[v1];[v1][b]overlay=${pad}:${pad}[v]`,
         "-map", "[v]", "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "28", out,
       ]);
       return await readFile(out);

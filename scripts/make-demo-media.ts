@@ -14,7 +14,7 @@ import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import sharp from "sharp";
 import ffmpegPath from "ffmpeg-static";
-import { TEMPLATES, type TemplateDef, type RoleTone } from "../src/lib/templates";
+import { EXAMPLE_TEMPLATES as TEMPLATES, type TemplateDef, type RoleTone } from "../src/lib/templates";
 
 const FPS = 24;
 const W = 720;

@@ -93,11 +93,11 @@ async function main() {
   ok("meme opens a draft; opening it again resumes the same draft");
 
   // participant 1: invalid files create nothing
-  await upload(a, draftId, "mic-left", new Blob([new TextEncoder().encode("nope")], { type: "image/jpeg" }), { expect: 400 });
-  await upload(a, draftId, "mic-left", await photo(10, 300, 300), { expect: 400 });
+  await upload(a, draftId, "left", new Blob([new TextEncoder().encode("nope")], { type: "image/jpeg" }), { expect: 400 });
+  await upload(a, draftId, "left", await photo(10, 300, 300), { expect: 400 });
   assert.equal((await a.json(`/api/drafts/${draftId}`)).roles[0].person, null);
-  const up1 = await upload(a, draftId, "mic-left", await photo(20));
-  await upload(a, draftId, "mic-left", await photo(40));
+  const up1 = await upload(a, draftId, "left", await photo(20));
+  await upload(a, draftId, "left", await photo(40));
   d = await a.json(`/api/drafts/${draftId}`);
   assert.equal(d.roles[0].person.id, up1.personId);
   assert.equal(d.roles[0].person.photos.length, 2, "same person, no duplicate");
@@ -105,9 +105,9 @@ async function main() {
   assert.equal(d.roles[0].look.clothing, "template", "default look");
   ok("participant 1: bad files rejected without side effects; 2 photos → one saved person");
 
-  d = await a.json(`/api/drafts/${draftId}`, { method: "PATCH", json: { op: "look", roleId: "mic-left", look: { clothing: "preset", presetId: "suit" }, version: d.version } });
+  d = await a.json(`/api/drafts/${draftId}`, { method: "PATCH", json: { op: "look", roleId: "left", look: { clothing: "preset", presetId: "suit" }, version: d.version } });
   assert.equal(d.roles[0].look.presetId, "suit");
-  const up2 = await upload(a, draftId, "mic-right", await photo(200), { save: false });
+  const up2 = await upload(a, draftId, "right", await photo(200), { save: false });
   d = await a.json(`/api/drafts/${draftId}`);
   assert.equal(d.roles[1].person.saved, false, "«Не сохранять» keeps them out of the library");
   assert.equal(d.ready, true);
@@ -156,7 +156,7 @@ async function main() {
   ok("switching to an earlier variant is free and generates nothing");
 
   // changes make previews non-actual; an outdated preview is never sent to video
-  const extra = await upload(a, draftId, "mic-left", await photo(60));
+  const extra = await upload(a, draftId, "left", await photo(60));
   d = await a.json(`/api/drafts/${draftId}`);
   assert.ok(d.previews.every((p: { actual: boolean }) => !p.actual), "both previews became non-actual");
   const vp = d.quotes.video.price?.amountMinor ?? null;
@@ -189,7 +189,7 @@ async function main() {
   assert.match(dl.headers.get("content-disposition") ?? "", /attachment/);
   await writeFile(file, Buffer.from(await dl.arrayBuffer()));
   let meta = await probe(file);
-  assert.ok(meta.hasAudio && Math.abs(meta.durationSec - 8) < 0.2, JSON.stringify(meta));
+  assert.ok(meta.hasAudio && Math.abs(meta.durationSec - 10) < 0.2, JSON.stringify(meta));
   ok(`path A result: ${meta.durationSec.toFixed(2)} s with the original audio (ffprobe); test purchase recorded once`);
 
   // path B: straight to video, no preview used, no hidden picture
@@ -204,7 +204,7 @@ async function main() {
   const file2 = join(await mkdtemp(join(tmpdir(), "memni-e2e-")), "b.mp4");
   await writeFile(file2, Buffer.from(await (await a.req(`/api/files/job/${v2.job.id}`)).arrayBuffer()));
   meta = await probe(file2);
-  assert.ok(meta.hasAudio && Math.abs(meta.durationSec - 8) < 0.2);
+  assert.ok(meta.hasAudio && Math.abs(meta.durationSec - 10) < 0.2);
   assert.equal((await a.req(`/api/files/jobscene/${v2.job.id}`)).status, 404, "direct job has no scene image");
   ok("path B (straight to video): one job, no hidden preview, original audio present");
 
@@ -218,7 +218,7 @@ async function main() {
   ok("another user gets 404 for draft, job, files, video start, people");
 
   // «Сделать ещё» with the same people
-  const { id: soloId } = await a.json("/api/drafts", { method: "POST", json: { templateId: "morning-show", fromDraftId: draftId } }, 201);
+  const { id: soloId } = await a.json("/api/drafts", { method: "POST", json: { templateId: "hotel-lobby", fromDraftId: draftId } }, 201);
   d = await a.json(`/api/drafts/${soloId}`);
   assert.equal(d.roles[0].person.id, up1.personId);
   ok("«Сделать ещё»: people carried over");

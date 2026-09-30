@@ -7,7 +7,7 @@
  */
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import sharp, { type Metadata, type OverlayOptions } from "sharp";
+import sharp, { type OverlayOptions } from "sharp";
 import { ImageProviderError, type ImageProvider, type ImageResult, type ScenePreviewRequest } from "./types";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -48,8 +48,12 @@ export class DemoImageProvider implements ImageProvider {
         .toBuffer();
       layers.push({ input: face, left: Math.round((r.x + r.w / 2) * w - side / 2), top: Math.round(r.y * h + 8) });
     }
-    layers.push({ input: await badge("badge-demo.png"), left: 40, top: h - 150 });
-    layers.push({ input: await badge("badge-scene.png"), left: 40, top: h - 94 });
+    // badges scale with the frame, so they stay readable but never cover faces
+    const bh = Math.max(20, Math.round(h * 0.055));
+    const b1 = await sharp(await badge("badge-demo.png")).resize({ height: bh }).toBuffer();
+    const b2 = await sharp(await badge("badge-scene.png")).resize({ height: bh }).toBuffer();
+    layers.push({ input: b1, left: Math.round(h * 0.04), top: h - bh * 2 - Math.round(h * 0.06) });
+    layers.push({ input: b2, left: Math.round(h * 0.04), top: h - bh - Math.round(h * 0.04) });
     const bytes = await sharp(req.referenceFrame.bytes)
       .resize(w, h, { fit: "cover" })
       .composite(layers)

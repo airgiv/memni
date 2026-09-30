@@ -1,8 +1,11 @@
 "use client";
 import { useRef, useState } from "react";
-import { Avatar, toast } from "@/ui/rapui";
-import { Plus, RefreshCw, X } from "@/ui/icons";
-import { Switch } from "@/ui/Switch";
+import { Plus, Users } from "lucide-react";
+import { toast } from "sonner";
+import { Button } from "@/ui/button";
+import { Dialog } from "@/ui/dialog";
+import { Segmented } from "@/ui/segmented";
+import { Spinner } from "@/ui/spinner";
 import { api } from "@/client/api";
 import type { ClientTemplate } from "@/lib/templates/client";
 import type { PersonDTO, RoleDTO } from "@/lib/server/present";
@@ -10,23 +13,9 @@ import type { LookSettings } from "@/lib/domain/types";
 import type { DraftOp } from "@/lib/server/services/drafts";
 
 const MAX_MB = 12;
+const MAX_PHOTOS = 3;
+const ACCEPT = "image/jpeg,image/png,image/webp";
 
-interface Uploading {
-  key: string;
-  url: string;
-  error?: string;
-}
-
-/** Look tags from the template: only what this meme supports, one choice. */
-function lookTags(t: ClientTemplate) {
-  const tags: { value: string; label: string }[] = [];
-  for (const m of t.look.clothingModes) {
-    if (m === "template") tags.push({ value: "template", label: t.look.templateOutfit.label });
-    if (m === "photo") tags.push({ value: "photo", label: "Одежда с фото" });
-    if (m === "preset") for (const p of t.look.presets) tags.push({ value: `preset:${p.id}`, label: p.label });
-  }
-  return tags;
-}
 function lookValue(l: LookSettings | null) {
   if (!l) return "template";
   return l.clothing === "preset" ? `preset:${l.presetId}` : l.clothing;
@@ -36,9 +25,9 @@ function lookFromValue(v: string): Partial<LookSettings> {
 }
 
 /**
- * «Replace this person»: the real cutout from the source video, the upload,
- * saved people, and — once there is a photo — a few look tags. No per-person
- * generation happens here.
+ * The frame IS the screen: the person being replaced fills it, a compact
+ * panel sits over the part that has no faces. Nothing is generated here —
+ * only photos and the look are collected.
  */
 export function ParticipantStep({
   template: t,
@@ -48,6 +37,8 @@ export function ParticipantStep({
   savedPeople,
   change,
   reload,
+  onNext,
+  nextLabel,
 }: {
   template: ClientTemplate;
   draftId: string;
@@ -56,54 +47,51 @@ export function ParticipantStep({
   savedPeople: PersonDTO[];
   change: (op: DraftOp) => Promise<unknown>;
   reload: () => Promise<unknown>;
+  onNext: () => void;
+  nextLabel: string;
 }) {
   const r = t.roles[index];
   const person = role.person;
+  const photos = person?.photos ?? [];
   const input = useRef<HTMLInputElement>(null);
   const replaceInput = useRef<HTMLInputElement>(null);
-  const [replacing, setReplacing] = useState<string | null>(null);
-  const [uploading, setUploading] = useState<Uploading[]>([]);
-  // «Не сохранять»: off by default — new people go to the library
+  const [uploading, setUploading] = useState<{ key: string; url: string }[]>([]);
   const [dontSave, setDontSave] = useState(false);
+  const [openPhoto, setOpenPhoto] = useState<string | null>(null);
+  const [peopleOpen, setPeopleOpen] = useState(false);
+  const [moreLooks, setMoreLooks] = useState(false);
   const notSaved = person ? !person.saved : dontSave;
-  const max = 3;
-  const count = person?.photos.length ?? 0;
+  const others = savedPeople.filter((p) => p.saved && p.id !== person?.id && p.photos.length > 0);
+  const busy = uploading.length > 0;
 
   const upload = async (files: File[], replaceId?: string) => {
-    const list = files.slice(0, replaceId ? 1 : Math.max(1, 8 - count));
+    const list = files.slice(0, replaceId ? 1 : Math.max(1, MAX_PHOTOS - photos.length));
     const items = list.map((f) => ({ key: `${f.name}-${f.size}-${Math.random()}`, url: URL.createObjectURL(f), file: f }));
-    // thumbnails show right away; uploads go one by one
     setUploading((u) => [...u, ...items.map(({ key, url }) => ({ key, url }))]);
     for (const it of items) {
-      let error: string | undefined;
-      if (it.file.size > MAX_MB * 1024 * 1024) error = `Файл больше ${MAX_MB} МБ`;
-      else {
-        try {
-          const fd = new FormData();
-          fd.append("file", it.file);
-          fd.append("save", String(!dontSave));
-          await api(`/api/drafts/${draftId}/roles/${r.id}/photos`, { method: "POST", body: fd });
-          if (replaceId) await api(`/api/photos/${replaceId}`, { method: "DELETE" });
-          await reload();
-        } catch (e) {
-          error = (e as Error).message;
-        }
+      try {
+        if (it.file.size > MAX_MB * 1024 * 1024) throw new Error(`Файл больше ${MAX_MB} МБ`);
+        const fd = new FormData();
+        fd.append("file", it.file);
+        fd.append("save", String(!dontSave));
+        await api(`/api/drafts/${draftId}/roles/${r.id}/photos`, { method: "POST", body: fd });
+        if (replaceId) await api(`/api/photos/${replaceId}`, { method: "DELETE" });
+        await reload();
+      } catch (e) {
+        toast.error((e as Error).message);
       }
-      if (error) toast.error(error);
       setUploading((u) => u.filter((x) => x.key !== it.key));
       URL.revokeObjectURL(it.url);
     }
   };
-
-  const remove = async (photoId: string) => {
+  const remove = async (id: string) => {
     try {
-      await api(`/api/photos/${photoId}`, { method: "DELETE" });
+      await api(`/api/photos/${id}`, { method: "DELETE" });
       await reload();
     } catch (e) {
       toast.error((e as Error).message);
     }
   };
-
   const toggleSave = async (v: boolean) => {
     if (!person) return setDontSave(v);
     try {
@@ -114,162 +102,228 @@ export function ParticipantStep({
     }
   };
 
-  const others = savedPeople.filter((p) => p.saved && p.id !== person?.id && p.photos.length > 0);
-  const tags = lookTags(t);
+  const look = lookValue(role.look);
+  const base = [
+    ...(t.look.clothingModes.includes("template") ? [{ value: "template", label: t.look.templateOutfit.label }] : []),
+    ...(t.look.clothingModes.includes("photo") ? [{ value: "photo", label: "С фото" }] : []),
+  ];
+  const presets = t.look.clothingModes.includes("preset") ? t.look.presets.map((p) => ({ value: `preset:${p.id}`, label: p.label })) : [];
+  const showPresets = moreLooks || look.startsWith("preset:");
+  const f = t.media.referenceFrame;
+  const panelSide = r.region.x + r.region.w / 2 < 0.5 ? "md:right-4" : "md:left-4";
+
+  const panel = (
+    <div className="flex flex-col gap-3">
+      {photos.length === 0 && !busy ? (
+        <div className="flex flex-wrap items-center gap-2">
+          <Button onClick={() => input.current?.click()} icon={<Plus className="size-4" aria-hidden />} className="max-md:h-12 max-md:flex-1">
+            Загрузить фото
+          </Button>
+          {others.length > 0 && (
+            <Button variant="secondary" onClick={() => setPeopleOpen(true)} icon={<Users className="size-4" aria-hidden />} className="max-md:h-12">
+              Мои люди
+            </Button>
+          )}
+          <span className="text-[13px] text-white/80">1–3 фото</span>
+        </div>
+      ) : (
+        <>
+          <div className="flex flex-wrap items-center gap-2">
+            <ul className="flex gap-2" aria-label="Фото">
+              {photos.map((p, i) => (
+                <li key={p.id}>
+                  <button
+                    type="button"
+                    onClick={() => setOpenPhoto(p.id)}
+                    aria-label={`Фото ${i + 1}: заменить или удалить`}
+                    className="block size-12 overflow-hidden rounded-lg border border-white/20 hover:border-white/60 md:size-11"
+                  >
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={p.url} alt="" className="size-full object-cover" />
+                  </button>
+                </li>
+              ))}
+              {uploading.map((u) => (
+                <li key={u.key} className="relative size-12 overflow-hidden rounded-lg md:size-11">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={u.url} alt="" className="size-full object-cover opacity-50" />
+                  <span className="absolute inset-0 grid place-items-center">
+                    <Spinner className="size-4" label="Загружаем" />
+                  </span>
+                </li>
+              ))}
+              {photos.length + uploading.length < MAX_PHOTOS && (
+                <li>
+                  <button
+                    type="button"
+                    onClick={() => input.current?.click()}
+                    aria-label="Добавить фото"
+                    className="grid size-12 place-items-center rounded-lg border border-dashed border-white/40 text-white hover:border-white/80 md:size-11"
+                  >
+                    <Plus className="size-5" aria-hidden />
+                  </button>
+                </li>
+              )}
+            </ul>
+            {others.length > 0 && (
+              <button type="button" onClick={() => setPeopleOpen(true)} className="ml-auto h-9 rounded-md px-2 text-[13px] text-white/80 hover:bg-white/10 hover:text-white">
+                Мои люди
+              </button>
+            )}
+          </div>
+          {photos.length > 0 && base.length + presets.length > 1 && (
+            <div className="flex flex-wrap items-center gap-2">
+              <Segmented
+                label="Одежда"
+                value={look}
+                onChange={(v) => void change({ op: "look", roleId: r.id, look: lookFromValue(v) })}
+                options={showPresets ? [...base, ...presets] : base}
+              />
+              {presets.length > 0 && !showPresets && (
+                <button type="button" onClick={() => setMoreLooks(true)} className="h-8 rounded-md px-2 text-[13px] text-white/80 hover:bg-white/10 hover:text-white">
+                  Ещё
+                </button>
+              )}
+            </div>
+          )}
+        </>
+      )}
+      <label className="flex w-fit cursor-pointer items-center gap-2 text-[13px] text-white/80">
+        <input type="checkbox" checked={notSaved} onChange={(e) => void toggleSave(e.target.checked)} className="size-4 accent-accent" />
+        Не сохранять в «Мои люди»
+      </label>
+      <div className="hidden justify-end md:flex">
+        <Button onClick={onNext} disabled={!role.ready || busy}>
+          {nextLabel}
+        </Button>
+      </div>
+    </div>
+  );
 
   return (
-    <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,5fr)_minmax(0,6fr)] lg:gap-12">
-      <figure className="mx-auto w-full max-w-[min(100%,calc(34dvh*3/4))] lg:sticky lg:top-24 lg:max-w-[440px]">
-        {/* the person as they appear in the source video — prepared once with the template */}
+    <div className="flex flex-col gap-3">
+      {/* phone: the portrait cutout of this person; desktop: the whole frame with this person picked out */}
+      <div className="relative overflow-hidden rounded-xl bg-black md:hidden">
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={r.cutout.src} alt={r.name} className="aspect-[3/4] w-full rounded-card object-cover" />
-      </figure>
+        <img src={r.cutout.src} alt={`${r.name}: этого человека заменим`} className="aspect-[3/4] max-h-[64dvh] w-full object-cover object-top" />
+        <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/85 via-black/60 to-transparent px-3 pt-10 pb-3">{panel}</div>
+      </div>
 
-      <div className="flex flex-col gap-5">
-        <div className="flex items-center justify-between gap-3">
-          <h1 className="text-[1.6rem] leading-tight font-medium tracking-[-0.03em] sm:text-[2rem]">Заменим этого человека</h1>
-          <span className="shrink-0 rounded-pill bg-surface px-3 py-1 text-[0.875rem] text-ink-2">
-            {index + 1} из {t.roles.length}
-          </span>
-        </div>
+      <div className="relative hidden overflow-hidden rounded-xl bg-black md:block" style={{ aspectRatio: `${f.width} / ${f.height}` }}>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={f.src} alt={`${r.name}: этого человека заменим`} className="absolute inset-0 size-full object-contain" />
+        {/* the person being replaced stays bright; the rest is dimmed a little */}
+        <div
+          aria-hidden
+          className="absolute rounded-lg ring-2 ring-accent"
+          style={{
+            left: `${r.region.x * 100}%`,
+            top: `${r.region.y * 100}%`,
+            width: `${r.region.w * 100}%`,
+            height: `${r.region.h * 100}%`,
+            boxShadow: "0 0 0 100vmax rgb(0 0 0 / 0.45)",
+          }}
+        />
+        <div className={`absolute bottom-4 w-[min(360px,42%)] rounded-xl bg-black/75 p-3 backdrop-blur-sm ${panelSide}`}>{panel}</div>
+      </div>
 
-        {others.length > 0 && (
-          <div className="flex flex-col gap-2">
-            <p className="text-[0.8125rem] text-mute">Мои люди</p>
-            <ul className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1 [scrollbar-width:none]" aria-label="Мои люди">
-              {others.map((p) => {
-                const main = p.photos.find((x) => x.id === p.mainPhotoId) ?? p.photos[0];
-                return (
-                  <li key={p.id}>
-                    <button
-                      type="button"
-                      onClick={() => void change({ op: "assign", roleId: r.id, personId: p.id })}
-                      className="flex w-16 flex-col items-center gap-1 rounded-row p-1 text-[0.75rem] text-ink-2 hover:bg-fill focus-visible:outline-2 focus-visible:outline-ring"
-                    >
-                      <Avatar name={p.name} src={main?.url} size="lg" />
-                      <span className="w-full truncate text-center">{p.name}</span>
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
-          </div>
-        )}
+      <div className="md:hidden">
+        <Button size="lg" block onClick={onNext} disabled={!role.ready || busy}>
+          {nextLabel}
+        </Button>
+      </div>
 
-        <div className="flex flex-col gap-3">
-          <ul className="grid grid-cols-3 gap-tile" aria-label="Фото">
-            {person?.photos.map((p) => (
-              <li key={p.id} className="relative aspect-[3/4] overflow-hidden rounded-[18px] bg-fill fun:animate-pop-in">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={p.url} alt="" className="size-full object-cover" />
-                <div className="absolute inset-x-1.5 top-1.5 flex justify-between">
-                  <button
-                    type="button"
-                    aria-label="Заменить фото"
-                    onClick={() => {
-                      setReplacing(p.id);
-                      replaceInput.current?.click();
-                    }}
-                    className="grid size-8 place-items-center rounded-full bg-black/60 text-white"
-                  >
-                    <RefreshCw size={15} />
-                  </button>
-                  <button type="button" aria-label="Удалить фото" onClick={() => void remove(p.id)} className="grid size-8 place-items-center rounded-full bg-black/60 text-white">
-                    <X size={15} />
-                  </button>
-                </div>
-              </li>
-            ))}
-            {uploading.map((u) => (
-              <li key={u.key} className="relative aspect-[3/4] overflow-hidden rounded-[18px] bg-fill">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={u.url} alt="" className="size-full object-cover opacity-60" />
-                <span className="absolute inset-x-0 bottom-2 text-center text-[0.75rem] text-white">Загружаем…</span>
-              </li>
-            ))}
-            {count + uploading.length < max && (
-              <li className={count + uploading.length === 0 ? "col-span-3" : ""}>
-                <label
-                  className={`flex cursor-pointer flex-col items-center justify-center gap-2 rounded-[18px] border-2 border-dashed border-line bg-surface p-4 text-center transition-colors duration-(--rap-dur-fast) ease-rm hover:border-ring focus-within:outline-2 focus-within:outline-ring ${
-                    count + uploading.length === 0 ? "py-10" : "aspect-[3/4]"
-                  }`}
-                  onDragOver={(e) => e.preventDefault()}
-                  onDrop={(e) => {
-                    e.preventDefault();
-                    void upload(Array.from(e.dataTransfer.files));
-                  }}
-                >
-                  <span className="grid size-11 place-items-center rounded-full bg-accent text-accent-ink">
-                    <Plus size={22} />
-                  </span>
-                  {count + uploading.length === 0 && <span className="text-[1rem] font-medium">Добавь 1–3 фото. Лучше три</span>}
-                  <input
-                    ref={input}
-                    type="file"
-                    accept="image/jpeg,image/png,image/webp"
-                    multiple
-                    className="sr-only"
-                    aria-label="Добавить фото"
-                    onChange={(e) => {
-                      void upload(Array.from(e.target.files ?? []));
-                      e.target.value = "";
-                    }}
-                  />
-                </label>
-              </li>
-            )}
-          </ul>
-          <input
-            ref={replaceInput}
-            type="file"
-            accept="image/jpeg,image/png,image/webp"
-            className="sr-only"
-            tabIndex={-1}
-            aria-hidden
-            onChange={(e) => {
-              const f = e.target.files?.[0];
-              if (f && replacing) void upload([f], replacing);
-              e.target.value = "";
-              setReplacing(null);
-            }}
-          />
-          {count > 0 && count < max && <p className="text-[0.8125rem] text-mute">Лучше три фото</p>}
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <Switch checked={notSaved} onCheckedChange={(v) => void toggleSave(v)} label="Не сохранять" onText="" offText="" />
-            <span className="text-[0.8125rem] text-mute">{notSaved ? "Только для этого ролика" : "Сохраним в «Мои люди»"}</span>
-          </div>
-          {person && (
-            <button type="button" onClick={() => void change({ op: "clear", roleId: r.id })} className="self-start text-[0.875rem] text-ink-2 underline-offset-4 hover:underline">
-              Другой человек
-            </button>
-          )}
-        </div>
+      <input
+        ref={input}
+        type="file"
+        accept={ACCEPT}
+        multiple
+        className="sr-only"
+        aria-label="Выбрать фото"
+        tabIndex={-1}
+        onChange={(e) => {
+          void upload(Array.from(e.target.files ?? []));
+          e.target.value = "";
+        }}
+      />
+      <input
+        ref={replaceInput}
+        type="file"
+        accept={ACCEPT}
+        className="sr-only"
+        aria-hidden
+        tabIndex={-1}
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          if (file && openPhoto) void upload([file], openPhoto);
+          e.target.value = "";
+          setOpenPhoto(null);
+        }}
+      />
 
-        {count > 0 && tags.length > 1 && (
-          <div className="flex flex-col gap-2 fun:animate-deal-in">
-            <p className="text-[0.8125rem] text-mute">Образ</p>
-            <div role="radiogroup" aria-label="Образ" className="flex flex-wrap gap-tight">
-              {tags.map((tag) => {
-                const on = tag.value === lookValue(role.look);
-                return (
-                  <button
-                    key={tag.value}
-                    type="button"
-                    role="radio"
-                    aria-checked={on}
-                    onClick={() => !on && void change({ op: "look", roleId: r.id, look: lookFromValue(tag.value) })}
-                    className={`h-control-sm rounded-pill px-4 text-[0.9375rem] font-medium transition-colors duration-(--rap-dur-fast) ease-rm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring ${
-                      on ? "bg-ink text-paper" : "bg-fill text-ink hover:bg-fill-hover"
-                    }`}
-                  >
-                    {tag.label}
-                  </button>
-                );
-              })}
+      <Dialog open={openPhoto !== null} onOpenChange={(v) => !v && setOpenPhoto(null)} title="Фото">
+        {openPhoto && (
+          <div className="flex flex-col gap-4">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={photos.find((p) => p.id === openPhoto)?.url} alt="" className="max-h-[50dvh] w-full rounded-lg object-contain" />
+            <div className="flex gap-2">
+              <Button className="flex-1" onClick={() => replaceInput.current?.click()}>
+                Заменить
+              </Button>
+              <Button
+                variant="secondary"
+                className="flex-1"
+                onClick={() => {
+                  const id = openPhoto;
+                  setOpenPhoto(null);
+                  void remove(id);
+                }}
+              >
+                Удалить
+              </Button>
             </div>
           </div>
         )}
-      </div>
+      </Dialog>
+
+      <Dialog open={peopleOpen} onOpenChange={setPeopleOpen} title="Мои люди">
+        <ul className="grid grid-cols-3 gap-2">
+          {others.map((p) => {
+            const main = p.photos.find((x) => x.id === p.mainPhotoId) ?? p.photos[0];
+            return (
+              <li key={p.id}>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    setPeopleOpen(false);
+                    await change({ op: "assign", roleId: r.id, personId: p.id });
+                  }}
+                  className="flex w-full flex-col gap-1 rounded-lg p-1 text-left hover:bg-surface-2"
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={main.url} alt="" className="aspect-square w-full rounded-md object-cover" />
+                  <span className="truncate text-[13px]">{p.name}</span>
+                </button>
+              </li>
+            );
+          })}
+          {person && (
+            <li>
+              <button
+                type="button"
+                onClick={async () => {
+                  setPeopleOpen(false);
+                  await change({ op: "clear", roleId: r.id });
+                }}
+                className="flex aspect-square w-full flex-col items-center justify-center gap-1 rounded-lg border border-dashed border-border text-[13px] text-muted hover:border-border-strong hover:text-fg"
+              >
+                <Plus className="size-5" aria-hidden />
+                Новый
+              </button>
+            </li>
+          )}
+        </ul>
+      </Dialog>
     </div>
   );
 }

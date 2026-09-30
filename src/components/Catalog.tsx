@@ -1,86 +1,54 @@
 "use client";
 import Link from "next/link";
-import { useMemo, useRef, useState } from "react";
-import { EmptyState, Input } from "@/ui/rapui";
-import { Search, X } from "@/ui/icons";
+import { useMemo, useState } from "react";
+import { Search } from "lucide-react";
+import { Input } from "@/ui/input";
 
 export interface CatalogItem {
   id: string;
   title: string;
   poster: string;
   aspectRatio: string;
+  ready: boolean;
 }
 
-/** The home page is the catalog: tiles only — a picture and a name, the whole tile opens the meme. */
+/** Home = the catalog: a grid of real video memes and a search. */
 export function Catalog({ items }: { items: CatalogItem[] }) {
   const [q, setQ] = useState("");
-  const [mobileSearch, setMobileSearch] = useState(false);
-  const mobileInput = useRef<HTMLInputElement>(null);
   const shown = useMemo(() => {
     const s = q.trim().toLowerCase();
     return s ? items.filter((i) => i.title.toLowerCase().includes(s)) : items;
   }, [q, items]);
 
   return (
-    <div className="page flex flex-col gap-4 pt-2 md:gap-6 md:pt-4">
-      <div className="hidden max-w-md md:block">
-        <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Найти мем" prefix={<Search size={18} />} aria-label="Поиск мемов" />
-      </div>
+    <div className="mx-auto flex max-w-6xl flex-col gap-5 px-4 pt-5 md:px-6 md:pt-8">
+      <label className="relative block max-w-sm">
+        <span className="sr-only">Поиск мемов</span>
+        <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted" aria-hidden />
+        <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Найти мем" className="pl-9" />
+      </label>
 
       {shown.length === 0 ? (
-        <EmptyState size="sm" title="Ничего не нашлось" />
+        <p className="text-muted">Ничего не нашлось</p>
       ) : (
-        <ul className="grid grid-cols-2 gap-tile sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5" aria-label="Мемы">
+        <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4" aria-label="Мемы">
           {shown.map((t) => (
             <li key={t.id}>
-              <Link
-                href={`/m/${t.id}`}
-                className="group block overflow-hidden rounded-[20px] bg-surface focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-              >
-                <div className="overflow-hidden" style={{ aspectRatio: t.aspectRatio.replace(":", " / ") }}>
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={t.poster}
-                    alt=""
-                    className="size-full object-cover transition-[scale] duration-(--rap-dur) ease-soft group-hover:scale-103"
-                    loading="lazy"
-                  />
+              <Link href={`/m/${t.id}`} className="group block overflow-hidden rounded-xl border border-border bg-surface transition-colors hover:border-border-strong">
+                <div className="bg-black" style={{ aspectRatio: t.aspectRatio.replace(":", " / ") }}>
+                  {t.ready ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={t.poster} alt="" className="size-full object-cover" loading="lazy" />
+                  ) : (
+                    <div className="grid size-full place-items-center text-[12px] text-muted">Видео не подключено</div>
+                  )}
                 </div>
-                <p className="truncate px-3 py-2.5 text-[0.9375rem] font-medium tracking-[-0.01em]">{t.title}</p>
+                <p className="truncate px-3 py-2 text-[14px] font-medium">{t.title}</p>
               </Link>
             </li>
           ))}
         </ul>
       )}
-
-      {/* phone: a compact search at the bottom, out of the tiles' way */}
-      <div className="fixed right-4 bottom-[calc(var(--safe-bottom)+16px)] left-4 z-30 flex justify-end md:hidden">
-        {mobileSearch ? (
-          <div className="flex w-full items-center gap-tight rounded-pill bg-surface p-1 shadow-pop">
-            <Input ref={mobileInput} value={q} onChange={(e) => setQ(e.target.value)} placeholder="Найти мем" aria-label="Поиск мемов" className="flex-1" autoFocus />
-            <button
-              type="button"
-              aria-label="Закрыть поиск"
-              onClick={() => {
-                setQ("");
-                setMobileSearch(false);
-              }}
-              className="grid size-11 shrink-0 place-items-center rounded-full bg-fill text-ink"
-            >
-              <X size={18} />
-            </button>
-          </div>
-        ) : (
-          <button
-            type="button"
-            aria-label="Поиск"
-            onClick={() => setMobileSearch(true)}
-            className="grid size-13 place-items-center rounded-full bg-surface text-ink shadow-pop focus-visible:outline-2 focus-visible:outline-ring"
-          >
-            <Search size={20} />
-          </button>
-        )}
-      </div>
     </div>
   );
 }

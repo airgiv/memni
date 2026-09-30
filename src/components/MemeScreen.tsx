@@ -1,22 +1,12 @@
 "use client";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
-import { toast } from "@/ui/rapui";
-import { Button } from "@/ui/Button";
-import { VideoPlayer } from "@/ui/VideoPlayer";
+import { toast } from "sonner";
+import { Button } from "@/ui/button";
 import { api } from "@/client/api";
-import { money } from "@/client/money";
-import type { Money } from "@/lib/domain/types";
 
-export function MemeScreen({
-  meme,
-  price,
-  paymentsLive,
-}: {
-  meme: { id: string; title: string; example: { src: string; poster: string }; aspectRatio: string };
-  price: Money | null;
-  paymentsLive: boolean;
-}) {
+/** The meme: the real video with its original sound, one line of how it works, one action. */
+export function MemeScreen({ meme }: { meme: { id: string; title: string; example: { src: string; poster: string }; aspectRatio: string; ready: boolean } }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   const start = async () => {
@@ -30,24 +20,23 @@ export function MemeScreen({
     }
   };
   return (
-    <div className="page grid items-start gap-5 pt-2 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] lg:gap-12 lg:pt-6">
-      <div className="mx-auto w-full max-w-[min(100%,calc(66dvh*9/16))] overflow-hidden rounded-card bg-surface lg:max-w-[min(100%,calc((100dvh-7rem)*9/16))]">
-        {/* the example keeps its original sound — it plays when the user presses play */}
-        <VideoPlayer src={meme.example.src} poster={meme.example.poster} aspect={meme.aspectRatio.replace(":", " / ")} />
-      </div>
-      <div className="flex flex-col gap-4 lg:sticky lg:top-24 lg:pt-8">
-        <h1 className="text-[2rem] leading-tight font-medium tracking-[-0.03em] lg:text-[3rem]">{meme.title}</h1>
-        {price && (
-          <p className="text-[1rem] text-ink-2">
-            Видео — {money(price)}
-            {!paymentsLive && <span className="text-mute"> · оплата тестовая</span>}
-          </p>
+    <div className="mx-auto flex max-w-4xl flex-col gap-4 px-4 pt-4 md:px-6 md:pt-8">
+      <div className="overflow-hidden rounded-xl bg-black" style={{ aspectRatio: meme.aspectRatio.replace(":", " / ") }}>
+        {meme.ready ? (
+          // native controls: play and the sound toggle are keyboard and screen-reader accessible
+          <video src={meme.example.src} poster={meme.example.poster} controls playsInline preload="metadata" className="size-full" aria-label={`${meme.title}, видео со звуком`} />
+        ) : (
+          <div className="grid size-full place-items-center p-6 text-center text-muted">Видео ещё не подключено</div>
         )}
-        <div className="fixed inset-x-0 bottom-0 z-30 bg-paper/95 px-4 pt-3 pb-[calc(var(--safe-bottom)+12px)] backdrop-blur-md lg:static lg:bg-transparent lg:p-0 lg:backdrop-blur-none">
-          <Button variant="accent" size="lg" block onClick={start} state={busy ? "loading" : undefined}>
-            Сделать с собой
-          </Button>
+      </div>
+      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+        <div className="flex flex-col gap-1">
+          <h1 className="text-[22px] font-semibold tracking-tight md:text-[26px]">{meme.title}</h1>
+          <p className="text-[14px] text-muted">Выбери людей → настрой образы → создай видео</p>
         </div>
+        <Button onClick={start} loading={busy} disabled={!meme.ready} size="md" className="max-md:h-12 max-md:w-full">
+          Заменить людей
+        </Button>
       </div>
     </div>
   );

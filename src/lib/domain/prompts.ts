@@ -7,7 +7,7 @@
 import type { TemplateDef, TemplateRole } from "../templates/types";
 import type { LookSettings, Person } from "./types";
 
-export const PROMPT_VERSIONS = ["hotel-lobby/2026-09-b", "generic/2026-09-b"] as const;
+export const PROMPT_VERSIONS = ["hotel-lobby/2026-09-c", "generic/2026-09-b"] as const;
 
 /** The appearance note is user text: keep it short, single-line, and quoted as data. */
 export function sanitizeNote(note: string | undefined, max: number): string | undefined {

@@ -1,98 +1,60 @@
 /*
- * rapui integration.
- *
- * 1. `@rapui/react/styles.css` (imported in layout.tsx) is the precompiled
- *    library sheet: it carries the components' own keyframes and co-located CSS,
- *    which the Tailwind-only route (theme.css + @source) does not include in
- *    @rapui/react 0.1.0.
- * 2. Here, the same theme tokens are given to OUR Tailwind v4 build, so the
- *    app's own components use bg-surface, text-ink, rounded-card, fun: … too.
- *
- * The app is dark only: <html data-rap-theme="dark"> is server-rendered, so
- * there is no light flash while loading.
+ * One plain dark style for the whole prototype: Tailwind utilities on a few
+ * tokens. No decorative motion — hover changes a background or a border,
+ * focus is a clear ring. Dark is server-rendered, so there is no light flash.
  */
 @import "tailwindcss";
-@import "@rapui/react/theme.css";
+
+@theme {
+  --color-bg: #0e0e10;
+  --color-surface: #18181b;
+  --color-surface-2: #232327;
+  --color-border: #2f2f35;
+  --color-border-strong: #45454d;
+  --color-fg: #f4f4f5;
+  --color-muted: #a1a1aa;
+  --color-accent: #ff5b1a;
+  --color-accent-hover: #e94e10;
+  --color-accent-fg: #ffffff;
+  --color-ring: #7ab8ff;
+  --color-danger: #f87171;
+  --color-success: #34d399;
+  --color-warning: #fbbf24;
+  --font-sans: "Onest Variable", ui-sans-serif, system-ui, sans-serif;
+}
 
 @layer base {
   html {
-    -webkit-tap-highlight-color: transparent;
     color-scheme: dark;
-    background: var(--rap-paper);
+    background: var(--color-bg);
+    -webkit-tap-highlight-color: transparent;
     /* Telegram / iOS safe areas (TelegramBridge fills the --tg-* vars) */
     --safe-top: max(env(safe-area-inset-top, 0px), var(--tg-safe-top, 0px));
     --safe-bottom: max(env(safe-area-inset-bottom, 0px), var(--tg-safe-bottom, 0px));
   }
   body {
     min-height: 100dvh;
-    background: var(--rap-paper);
-    color: var(--rap-ink);
+    background: var(--color-bg);
+    color: var(--color-fg);
+    font-family: var(--font-sans);
+    font-size: 15px;
+    line-height: 1.45;
+    -webkit-font-smoothing: antialiased;
   }
-  img,
-  video {
-    max-width: 100%;
+  :focus-visible {
+    outline: 2px solid var(--color-ring);
+    outline-offset: 2px;
   }
-}
-
-@layer components {
-  .page {
-    width: 100%;
-    max-width: 1280px;
-    margin-inline: auto;
-    padding-inline: 16px;
-  }
-  @media (min-width: 768px) {
-    .page {
-      padding-inline: 32px;
-    }
+  button:disabled {
+    cursor: not-allowed;
   }
 }
 
-/*
- * Dark palette tuning — unlayered on purpose, so it wins over rapui's
- * variant utilities (which live in @layer utilities).
- */
-[data-rap-theme="dark"] {
-  /* a hair more separation between page, cards and fields */
-  --rap-paper: #121212;
-  --rap-paper-2: #1c1c1c;
-  --rap-paper-3: #2a2a2a;
-  --rap-surface: #1e1e1e;
-  --rap-fill: rgb(245 245 245 / 0.08);
-  --rap-fill-hover: rgb(245 245 245 / 0.13);
-  --rap-mute: #8a8a8a;
-  --rap-ring: #4aa3ff;
-}
-
-/*
- * Buttons: the hover fill that floods in stays dark-palette (the library's
- * light-theme choice floods most variants with --rap-ink, which is near-white
- * here). The label keeps its colour and never moves.
- */
-[data-rap-theme="dark"] [data-slot="button"][data-variant="accent"] {
-  --btn-blob: color-mix(in srgb, var(--rap-accent) 72%, #000);
-  --btn-blob-fg: #fff;
-}
-[data-rap-theme="dark"] [data-slot="button"][data-variant="soft"] {
-  --btn-bg: var(--rap-paper-3);
-  --btn-blob: #3a3a3a;
-  --btn-blob-fg: var(--rap-ink);
-  --btn-icon-bg: #3a3a3a;
-}
-[data-rap-theme="dark"] [data-slot="button"][data-variant="blue"] {
-  --btn-blob: color-mix(in srgb, var(--rap-blue) 70%, #000);
-  --btn-blob-fg: #fff;
-}
-[data-rap-theme="dark"] [data-slot="button"][data-variant="outline"] {
-  --btn-border: var(--rap-line);
-  --btn-blob: var(--rap-paper-3);
-  --btn-blob-fg: var(--rap-ink);
-}
-[data-rap-theme="dark"] [data-slot="button"][data-variant="solid"] {
-  --btn-blob: #d9d9d9;
-  --btn-blob-fg: var(--rap-paper);
-}
-/* safety net for rapui parts that render Button internally (AlertDialog actions…): no letter roll */
-[data-slot="button"] [data-slot="roll-text-char"] {
-  translate: none !important;
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0ms !important;
+    animation-duration: 0ms !important;
+  }
 }

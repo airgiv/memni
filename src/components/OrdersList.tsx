@@ -1,19 +1,18 @@
 "use client";
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { Badge, EmptyState, FancyIcon, Skeleton, type BadgeVariant } from "@/ui/rapui";
-import { Button } from "@/ui/Button";
+import { Spinner } from "@/ui/spinner";
 import { api } from "@/client/api";
 import type { PublicJob } from "@/lib/server/services/jobs";
 
-const STATUS: Record<string, { label: string; variant: BadgeVariant }> = {
-  queued: { label: "В очереди", variant: "neutral" },
-  submitting: { label: "Генерация", variant: "blue" },
-  generating: { label: "Генерация", variant: "blue" },
-  assembling: { label: "Сборка", variant: "blue" },
-  ready: { label: "Готово", variant: "success" },
-  failed: { label: "Ошибка", variant: "danger" },
-  needs_review: { label: "Проверка", variant: "warning" },
+const STATUS: Record<string, string> = {
+  queued: "В очереди",
+  submitting: "Создаётся",
+  generating: "Создаётся",
+  assembling: "Создаётся",
+  ready: "Готово",
+  failed: "Ошибка",
+  needs_review: "Проверяем",
 };
 
 export function OrdersList({ titles }: { titles: Record<string, string> }) {
@@ -22,33 +21,29 @@ export function OrdersList({ titles }: { titles: Record<string, string> }) {
     api<PublicJob[]>("/api/jobs").then(setJobs).catch(() => setJobs([]));
   }, []);
   return (
-    <div className="page flex flex-col gap-5 pt-2 md:pt-6">
-      <h1 className="text-[1.75rem] font-medium tracking-[-0.03em]">Мои видео</h1>
+    <div className="mx-auto flex max-w-6xl flex-col gap-4 px-4 pt-5 md:px-6 md:pt-8">
+      <h1 className="text-[20px] font-semibold tracking-tight">Мои видео</h1>
       {!jobs ? (
-        <Skeleton height={200} />
+        <Spinner label="Загружаем" />
       ) : jobs.length === 0 ? (
-        <EmptyState
-          icon={<FancyIcon icon="clapperboard" tone="flame" float />}
-          title="Видео пока нет"
-          action={
-            <Link href="/">
-              <Button variant="accent">К мемам</Button>
-            </Link>
-          }
-        />
+        <p className="text-muted">
+          Пока нет. <Link href="/" className="text-fg underline underline-offset-4">К мемам</Link>
+        </p>
       ) : (
-        <ul className="grid gap-tile sm:grid-cols-2 lg:grid-cols-3">
+        <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
           {jobs.map((j) => (
             <li key={j.id}>
-              <Link href={`/orders/${j.id}`} className="flex flex-col gap-2 rounded-card bg-surface p-5 hover:bg-fill-hover">
-                <div className="flex flex-wrap gap-tight">
-                  <Badge variant={STATUS[j.status]?.variant ?? "neutral"} live={["queued", "submitting", "generating", "assembling"].includes(j.status)}>
-                    {STATUS[j.status]?.label ?? j.status}
-                  </Badge>
-                  {j.isDemo && <Badge variant="warning">демо</Badge>}
+              <Link href={`/orders/${j.id}`} className="block overflow-hidden rounded-xl border border-border bg-surface hover:border-border-strong">
+                <div className="aspect-video bg-black">
+                  {j.status === "ready" && (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={`/api/files/jobposter/${j.id}`} alt="" className="size-full object-cover" loading="lazy" />
+                  )}
                 </div>
-                <span className="text-[1.25rem] font-medium tracking-[-0.02em]">{titles[j.templateId] ?? j.templateId}</span>
-                <span className="text-[0.8125rem] text-mute">{new Date(j.createdAt).toLocaleString("ru-RU", { dateStyle: "medium", timeStyle: "short" })}</span>
+                <div className="flex items-center justify-between gap-2 px-3 py-2 text-[13px]">
+                  <span className="truncate font-medium">{titles[j.templateId] ?? j.templateId}</span>
+                  <span className={j.status === "failed" ? "text-danger" : j.status === "ready" ? "text-success" : "text-muted"}>{STATUS[j.status]}</span>
+                </div>
               </Link>
             </li>
           ))}

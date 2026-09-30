@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import { klingJwt } from "../src/lib/providers/video/kling";
 import { planVideoInputs } from "../src/lib/providers/video/types";
-import { getTemplate } from "../src/lib/templates";
+import { getTemplate, EXAMPLE_TEMPLATES } from "../src/lib/templates";
 
 test("Kling JWT: HS256 with iss/exp/nbf, verifiable with the secret", () => {
   const jwt = klingJwt("AK", "SK", 1_000_000);
@@ -15,7 +15,7 @@ test("Kling JWT: HS256 with iss/exp/nbf, verifiable with the secret", () => {
 
 test("both video paths are checked against what the provider supports", () => {
   const t2 = getTemplate("hotel-lobby")!;
-  const t1 = getTemplate("morning-show")!;
+  const t1 = EXAMPLE_TEMPLATES.find((x) => x.roles.length === 1)!;
   const kling = { motionReference: true, imageReference: true, perPersonReferences: false, withoutPreview: "single-person" as const, maxReferenceImages: 1, needsPublicUrls: true, maxDurationSec: 30 };
   assert.equal(planVideoInputs(t2, kling, "preview").ok, true);
   const direct2 = planVideoInputs(t2, kling, "direct");

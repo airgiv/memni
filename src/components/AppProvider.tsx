@@ -1,6 +1,6 @@
 "use client";
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
-import { SoundProvider, Toaster, TooltipProvider } from "@/ui/rapui";
+import { Toaster } from "sonner";
 import { api } from "@/client/api";
 import type { PublicConfig } from "@/lib/config";
 import { TelegramBridge } from "./TelegramBridge";
@@ -20,7 +20,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     try {
       setMe(await api<Me>("/api/me"));
     } catch {
-      /* shown by the pages that need it */
+      /* pages show their own errors */
     }
   }, []);
   useEffect(() => {
@@ -28,25 +28,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [refresh]);
   return (
     <Ctx.Provider value={{ me, refresh }}>
-      {/* interface sounds are off by default */}
-      <SoundProvider enabled={false}>
-        <TooltipProvider>
-          <TelegramBridge onLogin={refresh} />
-          {children}
-          <Toaster
-            position="top-center"
-            theme="dark"
-            // rapui toasts are ink slabs, which is near-white on the dark palette
-            toastOptions={{
-              classNames: {
-                toast: "bg-paper-3 text-ink shadow-[0_0_0_1px_var(--rap-line),var(--rap-shadow-pop)]",
-                description: "text-mute",
-                actionButton: "bg-accent text-accent-ink hover:bg-accent",
-              },
-            }}
-          />
-        </TooltipProvider>
-      </SoundProvider>
+      <TelegramBridge onLogin={refresh} />
+      {children}
+      <Toaster
+        position="top-center"
+        theme="dark"
+        toastOptions={{ classNames: { toast: "!bg-surface-2 !border !border-border !text-fg", description: "!text-muted" } }}
+      />
     </Ctx.Provider>
   );
 }

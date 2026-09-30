@@ -13,16 +13,20 @@
     "test": "tsx --test tests/*.test.ts",
     "media:demo": "tsx scripts/make-demo-media.ts",
     "seed:templates": "tsx scripts/seed-templates.ts",
-    "e2e": "tsx scripts/e2e.ts"
+    "e2e": "tsx scripts/e2e.ts",
+    "media:import": "tsx scripts/import-video.ts"
   },
   "dependencies": {
-    "@rapui/react": "^0.1.0",
+    "@fontsource-variable/onest": "^5.3.1",
     "@supabase/ssr": "^0.12.7",
     "@supabase/supabase-js": "^2.117.2",
+    "lucide-react": "^1.49.0",
     "next": "^16.3.7",
+    "radix-ui": "^1.6.7",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "sharp": "^0.35.5",
+    "sonner": "^2.0.8",
     "zod": "^4.6.5"
   },
   "devDependencies": {

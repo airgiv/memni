@@ -2,21 +2,21 @@
 import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Alert, Badge, EmptyState, FancyIcon, Skeleton, Spinner, toast } from "@/ui/rapui";
-import { ArrowLeft } from "@/ui/icons";
-import { Button } from "@/ui/Button";
+import { ArrowLeft } from "lucide-react";
+import { toast } from "sonner";
+import { Button } from "@/ui/button";
+import { Spinner } from "@/ui/spinner";
 import { api, ApiError } from "@/client/api";
-import { money } from "@/client/money";
 import type { ClientTemplate } from "@/lib/templates/client";
-import type { DraftDTO, PersonDTO, PreviewDTO } from "@/lib/server/present";
+import type { DraftDTO, PersonDTO } from "@/lib/server/present";
 import type { DraftOp } from "@/lib/server/services/drafts";
-import type { Money } from "@/lib/domain/types";
 import { useMe } from "../AppProvider";
 import { useDraft } from "./useDraft";
 import { ParticipantStep } from "./ParticipantStep";
 import { PurchaseDialog, type PurchaseRequest } from "./PurchaseDialog";
+import { StepStrip } from "./StepStrip";
 
-/** ?s=1..N — participant, ?s=go — preview or video, ?s=preview — the shared preview */
+/** ?s=1..N — a person, ?s=go — summary with the two actions, ?s=preview — the shared photo preview */
 type Step = { kind: "person"; index: number } | { kind: "go" } | { kind: "preview" };
 
 function parseStep(s: string | null, total: number): Step | null {
@@ -35,13 +35,12 @@ export function Constructor({ template: t }: { template: ClientTemplate }) {
   const [people, setPeople] = useState<PersonDTO[]>([]);
   const [purchase, setPurchase] = useState<PurchaseRequest | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
-  const paymentsLive = me?.config.paymentsLive ?? false;
 
   const loadPeople = useCallback(async () => {
     try {
       setPeople(await api<PersonDTO[]>("/api/people"));
     } catch {
-      /* the strip just stays empty */
+      /* no saved people shown */
     }
   }, []);
   useEffect(() => {
@@ -52,20 +51,16 @@ export function Constructor({ template: t }: { template: ClientTemplate }) {
     const fromUrl = parseStep(search.get("s"), t.roles.length);
     if (fromUrl) return fromUrl;
     if (!draft) return null;
-    // after a reload: continue where it stopped
     const open = draft.roles.findIndex((r) => !r.ready);
     if (open >= 0) return { kind: "person", index: open };
     return draft.previews.length ? { kind: "preview" } : { kind: "go" };
   }, [search, draft, t.roles.length]);
   const go = useCallback((s: Step) => router.push(`?s=${stepParam(s)}`, { scroll: false }), [router]);
-  // a step derived after load is pinned in the URL, so uploading a photo never jumps ahead
+  // a derived step is pinned in the URL, so adding a photo never jumps ahead; «назад» keeps everything
   const pinned = search.get("s");
   useEffect(() => {
     if (!pinned && step) router.replace(`?s=${stepParam(step)}`, { scroll: false });
   }, [pinned, step, router]);
-  useEffect(() => {
-    window.scrollTo({ top: 0, behavior: "instant" as ScrollBehavior });
-  }, [step?.kind, step?.kind === "person" ? step.index : -1]);
 
   const change = useCallback(
     async (op: DraftOp) => {
@@ -81,52 +76,36 @@ export function Constructor({ template: t }: { template: ClientTemplate }) {
     await Promise.all([reload(), loadPeople()]);
   }, [reload, loadPeople]);
 
-  /* ── paid actions ─────────────────────────────────────────────── */
-
-  const requestPreview = async () => {
+  const requestPreview = () => {
     if (!draft) return;
     const q = draft.quotes.preview;
     const send = async (purchaseKey?: string) => {
       try {
-        await api(`/api/drafts/${draftId}/previews`, {
-          method: "POST",
-          json: q.free ? {} : { acceptAmountMinor: q.price?.amountMinor ?? null, purchaseKey },
-        });
+        await api(`/api/drafts/${draftId}/previews`, { method: "POST", json: q.free ? {} : { acceptAmountMinor: q.price?.amountMinor ?? null, purchaseKey } });
         await reload();
         go({ kind: "preview" });
       } catch (e) {
-        if (e instanceof ApiError && e.status === 402) {
-          // the offer changed (e.g. the free preview was used in another tab): show the real price
-          await reload();
-          toast("Бесплатное превью уже использовано — проверьте цену");
-          return;
-        }
-        toast.error((e as Error).message);
+        await reload();
+        toast.error(e instanceof ApiError && e.status === 402 ? "Цена изменилась — проверьте ещё раз" : (e as Error).message);
         throw e;
       }
     };
     if (q.free) {
+      // the button itself says «бесплатно»: no hidden charge, so no extra dialog
       setBusy("preview");
-      try {
-        await send();
-      } finally {
-        setBusy(null);
-      }
-    } else setPurchase({ title: "Превью", price: q.price, onConfirm: send });
+      void send().finally(() => setBusy(null));
+    } else setPurchase({ title: "Фото-превью", price: q.price, onConfirm: send });
   };
 
   const requestVideo = (mode: "preview" | "direct", previewId?: string) => {
     if (!draft) return;
     const price = draft.quotes.video.price;
     setPurchase({
-      title: "Видео",
+      title: "Создать видео",
       price,
       onConfirm: async () => {
         try {
-          const res = await api<{ job: { id: string } }>(`/api/drafts/${draftId}/video`, {
-            method: "POST",
-            json: { mode, previewId, acceptAmountMinor: price?.amountMinor ?? null },
-          });
+          const res = await api<{ job: { id: string } }>(`/api/drafts/${draftId}/video`, { method: "POST", json: { mode, previewId, acceptAmountMinor: price?.amountMinor ?? null } });
           router.push(`/orders/${res.job.id}`);
         } catch (e) {
           await reload();
@@ -137,83 +116,57 @@ export function Constructor({ template: t }: { template: ClientTemplate }) {
     });
   };
 
-  /* ── render ───────────────────────────────────────────────────── */
-
   if (error)
     return (
-      <div className="page pt-10">
-        <EmptyState
-          icon={<FancyIcon icon="ghost" tone="plum" float />}
-          title={error.status === 404 ? "Черновик не найден" : "Не удалось открыть"}
-          action={
-            <Link href="/">
-              <Button variant="soft">К мемам</Button>
-            </Link>
-          }
-        />
+      <div className="mx-auto flex max-w-md flex-col items-center gap-4 px-4 pt-24 text-center">
+        <p>{error.status === 404 ? "Черновик не найден" : error.message}</p>
+        <Link href="/" className="rounded-lg bg-surface-2 px-4 py-2 text-[14px]">
+          К мемам
+        </Link>
       </div>
     );
   if (!draft || !step)
     return (
-      <div className="page grid gap-6 pt-4 lg:grid-cols-2">
-        <Skeleton className="aspect-[3/4] w-full" />
-        <div className="flex flex-col gap-3">
-          <Skeleton height={36} width="70%" shape="pill" />
-          <Skeleton height={160} />
-        </div>
+      <div className="grid place-items-center pt-32">
+        <Spinner label="Загружаем" />
       </div>
     );
 
-  let body: React.ReactNode;
-  let primary: React.ReactNode = null;
+  const current = step.kind === "person" ? step.index : "final";
+  const back = step.kind === "person" ? (step.index === 0 ? `/m/${t.id}` : `?s=${step.index}`) : step.kind === "go" ? `?s=${t.roles.length}` : "?s=go";
 
+  let body: React.ReactNode;
   if (step.kind === "person") {
-    const role = draft.roles[step.index];
     const last = step.index === t.roles.length - 1;
-    body = <ParticipantStep template={t} draftId={draftId} index={step.index} role={role} savedPeople={people} change={change} reload={refresh} />;
-    primary = (
-      <Button variant="accent" size="lg" block disabled={!role.ready} onClick={() => go(last ? { kind: "go" } : { kind: "person", index: step.index + 1 })}>
-        Дальше
-      </Button>
+    body = (
+      <ParticipantStep
+        key={step.index}
+        template={t}
+        draftId={draftId}
+        index={step.index}
+        role={draft.roles[step.index]}
+        savedPeople={people}
+        change={change}
+        reload={refresh}
+        nextLabel="Дальше"
+        onNext={() => go(last ? { kind: "go" } : { kind: "person", index: step.index + 1 })}
+      />
     );
   } else if (!draft.ready) {
     const open = draft.roles.findIndex((r) => !r.ready);
-    body = <EmptyState title="Добавьте фото всех участников" />;
-    primary = (
-      <Button variant="accent" size="lg" block onClick={() => go({ kind: "person", index: Math.max(0, open) })}>
-        К участникам
-      </Button>
-    );
-  } else if (step.kind === "go") {
-    const q = draft.quotes.preview;
-    const hasPreviews = draft.previews.length > 0;
     body = (
-      <div className="mx-auto flex w-full max-w-xl flex-col gap-5">
-        <Cast t={t} draft={draft} onOpen={(i) => go({ kind: "person", index: i })} />
-        <div className="grid gap-tile">
-          <Choice
-            title={hasPreviews ? "Превью" : "Посмотреть превью"}
-            hint={hasPreviews ? `${draft.previews.length} ${draft.previews.length === 1 ? "вариант" : "варианта"}` : q.free ? "Бесплатно" : money(q.price)}
-            onClick={() => (hasPreviews ? go({ kind: "preview" }) : void requestPreview())}
-            busy={busy === "preview"}
-            disabledReason={draft.video.preview.ok ? undefined : draft.video.preview.problem}
-          />
-          <Choice
-            title="Сразу видео"
-            hint={draft.quotes.video.price ? money(draft.quotes.video.price) : "Тестовый запуск"}
-            onClick={() => requestVideo("direct")}
-            disabledReason={draft.video.direct.ok ? undefined : draft.video.direct.problem}
-          />
-        </div>
-        <LastJob job={draft.video.lastJob} />
+      <div className="flex flex-col items-start gap-3 pt-6">
+        <p>Добавьте фото всех участников</p>
+        <Button onClick={() => go({ kind: "person", index: Math.max(0, open) })}>К участникам</Button>
       </div>
     );
+  } else if (step.kind === "go") {
+    body = <Summary t={t} draft={draft} busy={busy} onEdit={(i) => go({ kind: "person", index: i })} onVideo={() => requestVideo("direct")} onPreview={() => (draft.previews.length ? go({ kind: "preview" }) : requestPreview())} />;
   } else {
     body = (
       <PreviewScreen
         t={t}
         draft={draft}
-        busy={busy}
         onSelect={(id) => void change({ op: "select", previewId: id })}
         onMore={requestPreview}
         onVideo={(id) => requestVideo("preview", id)}
@@ -223,93 +176,84 @@ export function Constructor({ template: t }: { template: ClientTemplate }) {
     );
   }
 
-  const back =
-    step.kind === "person"
-      ? step.index === 0
-        ? `/m/${t.id}`
-        : `?s=${step.index}`
-      : step.kind === "go"
-        ? `?s=${t.roles.length}`
-        : "?s=go";
-
   return (
-    <div className="page flex flex-col gap-4 pt-1 lg:pt-4">
-      <Link href={back} className="flex w-fit items-center gap-1.5 rounded-pill py-1 pr-3 text-[0.9375rem] text-ink-2 hover:text-ink" aria-label="Назад">
-        <ArrowLeft size={18} /> {t.title}
-      </Link>
-      <div key={stepParam(step)} className="fun:animate-fade-in">
-        {body}
+    <div className="mx-auto flex max-w-5xl flex-col gap-3 px-4 pt-3 md:gap-4 md:px-6 md:pt-5">
+      <div className="flex items-center gap-3">
+        <Link href={back} aria-label="Назад" className="grid size-11 place-items-center rounded-lg text-muted hover:bg-surface hover:text-fg md:size-10">
+          <ArrowLeft className="size-5" aria-hidden />
+        </Link>
+        <StepStrip t={t} draft={draft} current={current} onPerson={(i) => go({ kind: "person", index: i })} onFinal={() => go(draft.previews.length ? { kind: "preview" } : { kind: "go" })} />
       </div>
-      {primary && (
-        <>
-          <div className="hidden lg:grid lg:grid-cols-[minmax(0,5fr)_minmax(0,6fr)] lg:gap-12">
-            <div />
-            <div>{primary}</div>
-          </div>
-          <div className="fixed inset-x-0 bottom-0 z-30 bg-paper/95 px-4 pt-3 pb-[calc(var(--safe-bottom)+12px)] backdrop-blur-md lg:hidden">{primary}</div>
-        </>
-      )}
-      <PurchaseDialog request={purchase} onClose={() => setPurchase(null)} paymentsLive={paymentsLive} />
+      {body}
+      <PurchaseDialog request={purchase} onClose={() => setPurchase(null)} paymentsLive={me?.config.paymentsLive ?? false} />
     </div>
   );
 }
 
-/* ── pieces ─────────────────────────────────────────────────────── */
+/* ── after the people: who replaces whom, and the two ways on ─────── */
 
-/** who replaces whom: the cutout from the video next to the user's photo */
-function Cast({ t, draft, onOpen }: { t: ClientTemplate; draft: DraftDTO; onOpen: (index: number) => void }) {
+function Summary({
+  t,
+  draft,
+  busy,
+  onEdit,
+  onVideo,
+  onPreview,
+}: {
+  t: ClientTemplate;
+  draft: DraftDTO;
+  busy: string | null;
+  onEdit: (i: number) => void;
+  onVideo: () => void;
+  onPreview: () => void;
+}) {
+  const q = draft.quotes.preview;
+  const hasPreviews = draft.previews.length > 0;
   return (
-    <ul className="flex flex-wrap justify-center gap-3" aria-label="Участники">
-      {t.roles.map((r, i) => {
-        const p = draft.roles[i].person;
-        const main = p?.photos.find((x) => x.id === p.mainPhotoId) ?? p?.photos[0];
-        return (
-          <li key={r.id}>
-            <button type="button" onClick={() => onOpen(i)} aria-label={`Участник ${i + 1}: изменить`} className="flex items-center rounded-card bg-surface p-1.5 hover:bg-fill-hover">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={r.cutout.src} alt="" className="h-20 w-15 rounded-[16px] object-cover" />
-              <span className="px-1 text-mute">→</span>
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              {main && <img src={main.url} alt="" className="h-20 w-15 rounded-[16px] object-cover" />}
-            </button>
-          </li>
-        );
-      })}
-    </ul>
+    <div className="flex flex-col gap-5 md:mx-auto md:w-full md:max-w-2xl md:pt-6">
+      <ul className="flex flex-wrap justify-center gap-3" aria-label="Участники">
+        {t.roles.map((r, i) => {
+          const p = draft.roles[i].person;
+          const main = p?.photos.find((x) => x.id === p.mainPhotoId) ?? p?.photos[0];
+          return (
+            <li key={r.id}>
+              <button type="button" onClick={() => onEdit(i)} aria-label={`${r.name}: изменить`} className="flex items-center gap-1 rounded-xl border border-border bg-surface p-1.5 hover:border-border-strong">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={r.cutout.src} alt="" className="h-28 w-21 rounded-lg object-cover object-top md:h-32 md:w-24" />
+                <span className="px-1 text-muted" aria-hidden>
+                  →
+                </span>
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                {main && <img src={main.url} alt="" className="h-28 w-21 rounded-lg object-cover md:h-32 md:w-24" />}
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+      <div className="flex flex-col gap-2 md:flex-row md:justify-center">
+        <Button onClick={onVideo} disabled={!draft.video.direct.ok} className="max-md:h-12">
+          Создать видео
+        </Button>
+        <Button variant="secondary" onClick={onPreview} loading={busy === "preview"} disabled={!draft.video.preview.ok} className="max-md:h-12">
+          {hasPreviews ? "Фото-превью" : "Сначала фото-превью"}
+          {!hasPreviews && q.free && <span className="font-normal text-success">· бесплатно</span>}
+        </Button>
+      </div>
+      {!draft.video.direct.ok && <p className="text-center text-[13px] text-muted">{draft.video.direct.problem}</p>}
+      {draft.video.lastJob && (
+        <Link href={`/orders/${draft.video.lastJob.id}`} className="self-center text-[13px] text-muted underline-offset-4 hover:text-fg hover:underline">
+          Уже созданное видео
+        </Link>
+      )}
+    </div>
   );
 }
 
-function Choice({ title, hint, onClick, busy, disabledReason }: { title: string; hint: string; onClick: () => void; busy?: boolean; disabledReason?: string }) {
-  const disabled = Boolean(disabledReason) || busy;
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      className="flex min-h-24 items-center justify-between gap-4 rounded-card bg-surface px-6 py-5 text-left transition-colors duration-(--rap-dur-fast) ease-rm hover:bg-fill-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:opacity-50"
-    >
-      <span className="flex flex-col gap-1">
-        <span className="text-[1.25rem] font-medium tracking-[-0.02em]">{title}</span>
-        {disabledReason && <span className="text-[0.8125rem] text-mute">{disabledReason}</span>}
-      </span>
-      {busy ? <Spinner size="sm" label="Создаём" /> : <span className="shrink-0 rounded-pill bg-fill px-3 py-1 text-[0.9375rem] font-medium">{hint}</span>}
-    </button>
-  );
-}
-
-function LastJob({ job }: { job: DraftDTO["video"]["lastJob"] }) {
-  if (!job) return null;
-  return (
-    <Link href={`/orders/${job.id}`} className="self-center text-[0.9375rem] text-ink-2 underline-offset-4 hover:underline">
-      Видео по этому черновику
-    </Link>
-  );
-}
+/* ── the shared photo preview ──────────────────────────────────────── */
 
 function PreviewScreen({
   t,
   draft,
-  busy,
   onSelect,
   onMore,
   onVideo,
@@ -318,53 +262,45 @@ function PreviewScreen({
 }: {
   t: ClientTemplate;
   draft: DraftDTO;
-  busy: string | null;
   onSelect: (id: string) => void;
-  onMore: () => Promise<void>;
-  onVideo: (previewId: string) => void;
+  onMore: () => void;
+  onVideo: (id: string) => void;
   onDirect: () => void;
   onEdit: () => void;
 }) {
   const list = [...draft.previews].reverse();
   const selected = draft.previews.find((p) => p.id === draft.selectedPreviewId) ?? list.find((p) => p.status !== "failed") ?? list[0];
   const pending = draft.previews.some((p) => p.status === "pending");
-  const q = draft.quotes.preview;
-  const newLabel = (base: string) => `${base} · ${q.free ? "бесплатно" : money(q.price)}`;
-  const videoPrice: Money | null = draft.quotes.video.price;
-
-  const main = !selected ? null : selected.status === "pending" ? (
-    <div className="absolute inset-0 grid place-items-center">
-      <Skeleton className="absolute inset-0 rounded-none" />
-      <span className="relative flex items-center gap-2 rounded-pill bg-surface px-4 py-2 text-[0.9375rem] shadow-pop">
-        <Spinner size="sm" label="" /> Создаём превью
-      </span>
-    </div>
-  ) : selected.status === "failed" ? (
-    <div className="absolute inset-0 grid place-items-center p-8 text-center text-[0.9375rem] text-ink-2">{selected.error}</div>
-  ) : (
-    // eslint-disable-next-line @next/next/no-img-element
-    <img key={selected.url} src={selected.url!} alt="Превью" className="absolute inset-0 size-full object-cover fun:animate-fade-in" />
-  );
-
   const actual = Boolean(selected && selected.status === "ready" && selected.actual);
+  const q = draft.quotes.preview;
+
   return (
-    <div className="grid items-start gap-5 pb-36 lg:grid-cols-[minmax(0,5fr)_minmax(0,6fr)] lg:gap-12 lg:pb-0">
-      <figure className="mx-auto flex w-full max-w-[min(100%,calc(48dvh*9/16))] flex-col gap-2 lg:sticky lg:top-24 lg:max-w-[min(100%,calc((100dvh-8rem)*9/16))]">
-        <div className="relative w-full overflow-hidden rounded-card bg-surface" style={{ aspectRatio: t.aspectRatio.replace(":", " / ") }}>
-          {main}
+    <div className="flex flex-col gap-3">
+      <figure className="flex flex-col gap-1.5">
+        <div className="relative overflow-hidden rounded-xl bg-black" style={{ aspectRatio: t.aspectRatio.replace(":", " / ") }}>
+          {selected?.status === "ready" && selected.url && (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={selected.url} alt="Фото-превью" className={`absolute inset-0 size-full object-contain ${selected.actual ? "" : "opacity-50"}`} />
+          )}
+          {selected?.status === "pending" && (
+            <div className="absolute inset-0 grid place-items-center">
+              <span className="flex items-center gap-2 rounded-lg bg-black/70 px-3 py-2 text-[14px]">
+                <Spinner className="size-4" /> Создаём превью
+              </span>
+            </div>
+          )}
+          {selected?.status === "failed" && <div className="absolute inset-0 grid place-items-center p-6 text-center text-danger">{selected.error}</div>}
           {selected?.status === "ready" && !selected.actual && (
-            <span className="absolute top-3 left-3">
-              <Badge variant="warning">для прежних фото</Badge>
-            </span>
+            <span className="absolute top-2 left-2 rounded-md bg-black/75 px-2 py-1 text-[12px] text-warning">для прежних фото</span>
           )}
         </div>
-        {selected?.isDemo && selected.status === "ready" && <figcaption className="text-[0.8125rem] text-mute">Демо: коллаж из ваших фото, не генерация</figcaption>}
+        {selected?.isDemo && selected.status === "ready" && <figcaption className="text-[12px] text-muted">Демо: коллаж из ваших фото, не генерация</figcaption>}
       </figure>
 
-      <div className="flex flex-col gap-5">
-        {list.length > 1 && (
-          <ul className="flex gap-tile overflow-x-auto pb-1 [scrollbar-width:none]" aria-label="Варианты">
-            {list.map((p: PreviewDTO) => (
+      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+        {list.length > 1 ? (
+          <ul className="flex gap-2 overflow-x-auto" aria-label="Варианты">
+            {list.map((p) => (
               <li key={p.id} className="shrink-0">
                 <button
                   type="button"
@@ -372,54 +308,43 @@ function PreviewScreen({
                   onClick={() => onSelect(p.id)}
                   aria-pressed={p.id === selected?.id}
                   aria-label={`Вариант ${p.seq}${p.actual ? "" : ", для прежних фото"}`}
-                  className={`relative block h-28 w-[63px] overflow-hidden rounded-[14px] bg-fill focus-visible:outline-2 focus-visible:outline-ring ${
-                    p.id === selected?.id ? "shadow-[0_0_0_3px_var(--rap-ring)]" : ""
-                  } ${p.actual ? "" : "opacity-50"}`}
+                  className={`relative block h-11 w-20 overflow-hidden rounded-md border-2 bg-surface ${p.id === selected?.id ? "border-accent" : "border-transparent hover:border-border-strong"} ${
+                    p.actual ? "" : "opacity-50"
+                  }`}
                 >
-                  {p.url && (
+                  {p.url ? (
                     // eslint-disable-next-line @next/next/no-img-element
                     <img src={p.url} alt="" className="size-full object-cover" />
+                  ) : (
+                    <span className="grid size-full place-items-center">{p.status === "pending" ? <Spinner className="size-4" /> : <span className="text-[11px] text-danger">ошибка</span>}</span>
                   )}
-                  {p.status === "pending" && (
-                    <span className="grid size-full place-items-center">
-                      <Spinner size="sm" label="" />
-                    </span>
-                  )}
-                  {p.status === "failed" && <span className="grid size-full place-items-center text-[0.6875rem] text-danger">ошибка</span>}
                 </button>
               </li>
             ))}
           </ul>
+        ) : (
+          <span className="hidden md:block" />
         )}
-
-        {selected?.status === "ready" && !selected.actual && <Alert variant="warning" title="Фото или образ изменились">Создайте новое превью или сразу видео.</Alert>}
-
-        {/* phone: the two actions stay under the thumb */}
-        <div className="fixed inset-x-0 bottom-0 z-30 flex flex-col gap-tight bg-paper/95 px-4 pt-3 pb-[calc(var(--safe-bottom)+12px)] backdrop-blur-md lg:static lg:bg-transparent lg:p-0 lg:backdrop-blur-none">
-          {actual ? (
-            <Button variant="accent" size="lg" block disabled={!draft.video.preview.ok} onClick={() => onVideo(selected!.id)}>
-              {`Создать видео${videoPrice ? ` · ${money(videoPrice)}` : ""}`}
-            </Button>
-          ) : (
-            <Button variant="accent" size="lg" block disabled={pending} onClick={() => void onMore()} state={busy === "preview" ? "loading" : undefined}>
-              {newLabel("Новое превью")}
-            </Button>
+        <div className="flex flex-col gap-2 md:flex-row md:items-center">
+          <Button variant="ghost" onClick={onEdit} className="max-md:order-3 max-md:h-11">
+            Изменить людей
+          </Button>
+          {selected?.status !== "pending" && (
+          <Button variant="secondary" onClick={onMore} disabled={pending || !draft.video.preview.ok} className="max-md:order-2 max-md:h-12">
+            {actual ? "Ещё вариант" : "Новое превью"}
+            {q.free && <span className="font-normal text-success">· бесплатно</span>}
+          </Button>
           )}
           {actual ? (
-            <Button variant="soft" size="lg" block disabled={pending} onClick={() => void onMore()} state={busy === "preview" ? "loading" : undefined}>
-              {newLabel("Ещё вариант")}
+            <Button onClick={() => onVideo(selected!.id)} className="max-md:order-1 max-md:h-12">
+              Создать видео
             </Button>
-          ) : (
-            <Button variant="soft" size="lg" block disabled={!draft.video.direct.ok} onClick={onDirect}>
-              {`Сразу видео${videoPrice ? ` · ${money(videoPrice)}` : ""}`}
+          ) : selected?.status === "pending" ? null : (
+            <Button onClick={onDirect} disabled={!draft.video.direct.ok || pending} className="max-md:order-1 max-md:h-12">
+              Создать видео без превью
             </Button>
           )}
-          {!draft.video.preview.ok && <p className="text-[0.8125rem] text-mute">{draft.video.preview.problem}</p>}
         </div>
-        <button type="button" onClick={onEdit} className="self-start text-[0.9375rem] text-ink-2 underline-offset-4 hover:underline">
-          Изменить участников
-        </button>
-        <LastJob job={draft.video.lastJob} />
       </div>
     </div>
   );

@@ -1,44 +1,38 @@
 "use client";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Badge } from "@/ui/rapui";
-import { Users, Video } from "@/ui/icons";
 import { useMe } from "./AppProvider";
 
 const NAV = [
-  { href: "/people", label: "Мои люди", Icon: Users },
-  { href: "/orders", label: "Мои видео", Icon: Video },
+  { href: "/people", label: "Мои люди" },
+  { href: "/orders", label: "Мои видео" },
 ];
 
 export function Header() {
   const { me } = useMe();
   const pathname = usePathname();
   return (
-    <header className="sticky top-0 z-40 bg-paper/90 pt-(--safe-top) backdrop-blur-md">
-      <div className="page flex h-14 items-center gap-3">
-        <Link href="/" className="text-[1.3rem] font-semibold tracking-[-0.04em] text-ink">
-          memni<span className="text-flame">.</span>
+    <header className="sticky top-0 z-40 border-b border-border/60 bg-bg/90 pt-(--safe-top) backdrop-blur">
+      <div className="mx-auto flex h-14 max-w-6xl items-center gap-3 px-4 md:px-6">
+        <Link href="/" className="text-[18px] font-semibold tracking-tight">
+          memni<span className="text-accent">.</span>
         </Link>
         {me?.config.isDemo && (
-          <Badge variant="warning" size="sm">
+          <span className="rounded-md border border-warning/40 px-1.5 py-0.5 text-[11px] font-medium text-warning" title="Генерации не подключены — результаты помечены как пример">
             демо
-          </Badge>
+          </span>
         )}
-        <nav className="ml-auto flex items-center gap-tight" aria-label="Разделы">
-          {NAV.map(({ href, label, Icon }) => {
-            const active = pathname.startsWith(href);
+        <nav className="ml-auto flex items-center gap-1" aria-label="Разделы">
+          {NAV.map((n) => {
+            const active = pathname.startsWith(n.href);
             return (
               <Link
-                key={href}
-                href={href}
-                aria-label={label}
+                key={n.href}
+                href={n.href}
                 aria-current={active ? "page" : undefined}
-                className={`flex h-control-sm items-center gap-2 rounded-pill px-3 text-[0.9375rem] font-medium transition-colors duration-(--rap-dur-fast) ease-rm ${
-                  active ? "bg-surface text-ink" : "text-ink-2 hover:bg-fill"
-                }`}
+                className={`flex h-9 items-center rounded-lg px-3 text-[14px] transition-colors ${active ? "bg-surface-2 text-fg" : "text-muted hover:bg-surface hover:text-fg"}`}
               >
-                <Icon size={18} />
-                <span className="hidden sm:inline">{label}</span>
+                {n.label}
               </Link>
             );
           })}
