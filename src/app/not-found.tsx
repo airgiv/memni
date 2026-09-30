@@ -1,0 +1,19 @@
+import Link from "next/link";
+import { Button, EmptyState, FancyIcon } from "@/ui/rapui";
+
+export default function NotFound() {
+  return (
+    <div className="page pt-16">
+      <EmptyState
+        icon={<FancyIcon icon="ghost" tone="plum" float />}
+        title="Здесь ничего нет"
+        description="Страница не найдена или принадлежит другому пользователю."
+        action={
+          <Link href="/">
+            <Button variant="soft">К мемам</Button>
+          </Link>
+        }
+      />
+    </div>
+  );
+}

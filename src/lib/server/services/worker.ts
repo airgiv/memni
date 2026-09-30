@@ -1,0 +1,253 @@
+/**
+ * One step of the video pipeline for one leased job. The worker loop
+ * (worker/index.ts) claims a job, calls `step`, and repeats.
+ *
+ *   queued ──submit──▶ generating ──poll──▶ assembling ──ffmpeg──▶ ready
+ *      │                   │                    │
+ *      └── rejected ──▶ failed ◀── provider failed      └─ duration mismatch ─▶ needs_review
+ *
+ * Money safety:
+ *  - the attempt counter and our external id are saved BEFORE the provider call;
+ *  - a submit that timed out is never re-sent blindly: we look the task up by
+ *    external id if the provider supports it, otherwise the job goes to
+ *    needs_review instead of risking a second paid generation;
+ *  - retries are manual only (services/jobs.ts retryJob) and capped per job.
+ */
+import { randomUUID } from "node:crypto";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { getConfig } from "../../config";
+import type { Job } from "../../domain/types";
+import { videoProviderFor, VideoProviderError, type VideoProvider, type VideoStatus } from "../../providers/video";
+import { getTemplate } from "../../templates";
+import { assembleWithOriginalAudio, AssemblyCheckError, DurationMismatchError } from "../media";
+import { getRepo } from "../repo";
+import { getStorage, keys } from "../storage";
+
+const MAX_GENERATION_MS = 2 * 60 * 60 * 1000;
+
+function pollDelay(job: Job, provider: VideoProvider) {
+  return provider.isDemo ? 1500 : Math.min(60_000, 10_000 + job.attempts * 5_000);
+}
+
+function publicUrl(src: string): string | undefined {
+  if (/^https?:\/\//.test(src)) return src;
+  const base = process.env.TEMPLATE_MEDIA_BASE_URL ?? getConfig().appUrl;
+  if (!base || base.includes("localhost")) return undefined;
+  return new URL(src, base).toString();
+}
+
+export async function step(job: Job, workerId: string): Promise<Job> {
+  const repo = getRepo();
+  const provider = videoProviderFor(job.provider);
+  const save = (patch: Partial<Job>) => repo.updateJob(job.id, patch, workerId);
+  const release = { lockedBy: undefined, lockedUntil: undefined };
+
+  try {
+    switch (job.status) {
+      case "queued":
+        return await submit(job, provider, save);
+      case "submitting":
+        // we crashed or timed out mid-submit: find out what happened, never resend blindly
+        return await recoverSubmit(job, provider, save);
+      case "generating": {
+        if (!job.providerTaskId) return await recoverSubmit(job, provider, save);
+        if (Date.now() - new Date(job.updatedAt).getTime() > MAX_GENERATION_MS && Date.now() - new Date(job.createdAt).getTime() > MAX_GENERATION_MS)
+          return await save({ status: "needs_review", error: "Видеосервис слишком долго не отвечает — проверим вручную", errorCode: "stuck", ...release });
+        const st = await provider.status(job.providerTaskId);
+        return await onStatus(job, st, provider, save);
+      }
+      case "assembling":
+        return await assemble(job, provider, save);
+      default:
+        return await save(release);
+    }
+  } catch (e) {
+    if (e instanceof VideoProviderError && (e.code === "timeout" || e.code === "network")) {
+      // transient while polling: keep the job, look again later
+      return await save({ nextPollAt: new Date(Date.now() + 30_000).toISOString(), ...release });
+    }
+    console.error(`[worker] job ${job.id} failed`, e);
+    return await save({
+      status: "failed",
+      error: e instanceof Error ? e.message : "Неизвестная ошибка",
+      errorCode: e instanceof VideoProviderError ? e.code : "internal",
+      finishedAt: new Date().toISOString(),
+      ...release,
+    });
+  }
+}
+
+type Save = (patch: Partial<Job>) => Promise<Job>;
+
+async function submit(job: Job, provider: VideoProvider, save: Save): Promise<Job> {
+  const repo = getRepo();
+  if (job.attempts >= job.maxAttempts)
+    return save({ status: "failed", error: "Попытки для этого видео закончились", errorCode: "attempts", lockedBy: undefined, lockedUntil: undefined });
+  const t = getTemplate(job.input.templateId);
+  const attempt = job.attempts + 1;
+  const externalId = `${job.id}-a${attempt}`;
+  // 1) persist intent first: if we die after the provider accepted, we know what to look for
+  job = await save({ status: "submitting", attempts: attempt, providerExternalId: externalId, providerTaskId: undefined });
+
+  let sceneImageUrl: string | undefined;
+  let sourceVideoUrl: string | undefined;
+  const referenceImageUrls: string[] = [];
+  if (provider.capabilities.needsPublicUrls) {
+    const storage = getStorage();
+    sceneImageUrl = (await storage.signedUrl(job.input.sceneImageKey, 3600)) ?? undefined;
+    sourceVideoUrl = publicUrl(job.input.sourceVideo.src);
+    if (!sceneImageUrl || !sourceVideoUrl)
+      return save({
+        status: "failed",
+        error: "Видеосервису нужны публичные ссылки на файлы: подключите Supabase Storage и задайте TEMPLATE_MEDIA_BASE_URL",
+        errorCode: "config",
+        attempts: attempt - 1,
+        lockedBy: undefined,
+        lockedUntil: undefined,
+      });
+    if (provider.capabilities.perPersonReferences)
+      for (const p of job.input.people) {
+        if (p.previewKey) {
+          const u = await storage.signedUrl(p.previewKey, 3600);
+          if (u) referenceImageUrls.push(u);
+        }
+      }
+  }
+
+  try {
+    const { taskId } = await provider.submit({
+      jobId: job.id,
+      externalId,
+      prompt: job.input.prompt,
+      negativePrompt: job.input.negativePrompt,
+      durationSec: job.input.durationSec,
+      aspectRatio: job.input.aspectRatio,
+      sceneImageUrl,
+      sourceVideoUrl,
+      referenceImageUrls,
+      characterOrientation: t?.provider.klingCharacterOrientation,
+      callbackUrl: process.env.VIDEO_WEBHOOK_URL,
+      demoFail: job.input.demoFail,
+    });
+    await repo.addUsage({
+      id: randomUUID(),
+      userId: job.userId,
+      kind: "video",
+      provider: provider.name,
+      isDemo: provider.isDemo,
+      refId: job.id,
+      estimatedCost: job.estimatedCost,
+      currency: "USD",
+      createdAt: new Date().toISOString(),
+    });
+    return save({ status: "generating", providerTaskId: taskId, nextPollAt: new Date(Date.now() + pollDelay(job, provider)).toISOString(), lockedBy: undefined, lockedUntil: undefined });
+  } catch (e) {
+    if (e instanceof VideoProviderError && (e.code === "timeout" || e.code === "network")) {
+      // unknown whether the provider created the task
+      return recoverSubmit(job, provider, save);
+    }
+    if (e instanceof VideoProviderError && (e.code === "rejected" || e.code === "unsupported" || e.code === "config")) {
+      // the provider refused before starting: this attempt did not cost anything
+      return save({ status: "failed", error: e.message, errorCode: e.code === "rejected" ? "rejected_input" : e.code, attempts: attempt - 1, finishedAt: new Date().toISOString(), lockedBy: undefined, lockedUntil: undefined });
+    }
+    throw e;
+  }
+}
+
+async function recoverSubmit(job: Job, provider: VideoProvider, save: Save): Promise<Job> {
+  if (job.providerTaskId) return save({ status: "generating", nextPollAt: new Date().toISOString(), lockedBy: undefined, lockedUntil: undefined });
+  if (job.providerExternalId && provider.canFindByExternalId) {
+    const found = await provider.findByExternalId(job.providerExternalId);
+    if (found) return save({ status: "generating", providerTaskId: found.taskId, nextPollAt: new Date().toISOString(), lockedBy: undefined, lockedUntil: undefined });
+    // provider says it has no such task → safe to submit again (same attempt number)
+    return save({ status: "queued", attempts: Math.max(0, job.attempts - 1), lockedBy: undefined, lockedUntil: undefined });
+  }
+  return save({
+    status: "needs_review",
+    error: "Не удалось понять, принял ли видеосервис задание. Чтобы не заплатить дважды, повторная отправка остановлена до ручной проверки",
+    errorCode: "unknown_submit",
+    lockedBy: undefined,
+    lockedUntil: undefined,
+  });
+}
+
+async function onStatus(job: Job, st: VideoStatus, provider: VideoProvider, save: Save): Promise<Job> {
+  switch (st.state) {
+    case "queued":
+    case "running":
+      return save({ nextPollAt: new Date(Date.now() + pollDelay(job, provider)).toISOString(), lockedBy: undefined, lockedUntil: undefined });
+    case "failed":
+      return save({ status: "failed", error: st.error ?? "Видеосервис не смог создать видео", errorCode: "provider_failed", finishedAt: new Date().toISOString(), lockedBy: undefined, lockedUntil: undefined });
+    case "succeeded": {
+      const next = await save({ status: "assembling", actualCost: st.actualCost ?? job.actualCost });
+      return assemble(next, provider, save, st);
+    }
+  }
+}
+
+async function localOrDownload(src: string, dir: string, name: string): Promise<string> {
+  if (/^https?:\/\//.test(src)) {
+    const res = await fetch(src);
+    if (!res.ok) throw new Error(`Не удалось скачать ${src}: HTTP ${res.status}`);
+    const p = join(dir, name);
+    await writeFile(p, Buffer.from(await res.arrayBuffer()));
+    return p;
+  }
+  return join(process.cwd(), "public", src);
+}
+
+async function assemble(job: Job, provider: VideoProvider, save: Save, known?: VideoStatus): Promise<Job> {
+  const repo = getRepo();
+  const storage = getStorage();
+  const c = getConfig();
+  const dir = await mkdtemp(join(tmpdir(), "memni-job-"));
+  try {
+    // 1) raw result from the provider (kept for audit / manual review)
+    let rawKey = job.rawResultKey;
+    if (!rawKey || !(await storage.exists(rawKey))) {
+      const st = known ?? (job.providerTaskId ? await provider.status(job.providerTaskId) : undefined);
+      if (!st || st.state !== "succeeded") throw new Error("Результат видеосервиса недоступен");
+      const bytes = await provider.fetchResult(st, job);
+      rawKey = keys.raw(job.userId, job.id, job.attempts);
+      await storage.put(rawKey, bytes, "video/mp4");
+      await repo.recordResultFile({ userId: job.userId, jobId: job.id, kind: "raw", storageKey: rawKey });
+      job = await save({ rawResultKey: rawKey });
+    }
+    const rawFile = join(dir, "raw.mp4");
+    await writeFile(rawFile, await storage.get(rawKey));
+
+    // 2) original audio, exact bounds from the template
+    const audioFile = await localOrDownload(job.input.audio.src, dir, "audio.m4a");
+    const outFile = join(dir, "final.mp4");
+    const meta = await assembleWithOriginalAudio({
+      videoFile: rawFile,
+      audioFile,
+      audioStartSec: job.input.audio.startSec,
+      audioEndSec: job.input.audio.endSec,
+      outFile,
+      toleranceSec: c.limits.durationToleranceSec,
+    });
+    const finalKey = keys.result(job.userId, job.id);
+    await storage.put(finalKey, await readFile(outFile), "video/mp4");
+    await repo.recordResultFile({ userId: job.userId, jobId: job.id, kind: "final", storageKey: finalKey, durationSec: meta.durationSec, hasAudio: meta.hasAudio });
+    if (job.actualCost !== undefined) await repo.updateUsage(job.id, { actualCost: job.actualCost });
+    return save({
+      status: "ready",
+      resultKey: finalKey,
+      resultMeta: meta,
+      finishedAt: new Date().toISOString(),
+      lockedBy: undefined,
+      lockedUntil: undefined,
+    });
+  } catch (e) {
+    if (e instanceof DurationMismatchError)
+      return save({ status: "needs_review", error: e.message, errorCode: "duration_mismatch", finishedAt: new Date().toISOString(), lockedBy: undefined, lockedUntil: undefined });
+    if (e instanceof AssemblyCheckError)
+      return save({ status: "failed", error: e.message, errorCode: "assembly_check", finishedAt: new Date().toISOString(), lockedBy: undefined, lockedUntil: undefined });
+    throw e;
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}

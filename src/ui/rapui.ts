@@ -1,0 +1,73 @@
+"use client";
+/**
+ * Client boundary for @rapui/react. The package ships without "use client"
+ * directives (it targets Vite apps), so importing it straight into a Server
+ * Component would fail on its hooks. Everything the app uses is re-exported
+ * from here — explicitly, because App Router does not allow `export *` in a
+ * client boundary. Server Components import these like any client component.
+ */
+export {
+  Alert,
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+  Avatar,
+  AvatarGroup,
+  Badge,
+  Button,
+  ButtonGroup,
+  Card,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  Display,
+  Accent,
+  Lead,
+  Eyebrow,
+  Drawer,
+  DrawerContent,
+  DrawerDescription,
+  DrawerFooter,
+  DrawerHeader,
+  DrawerTitle,
+  EmptyState,
+  FancyIcon,
+  FormField,
+  Input,
+  Label,
+  RadioGroup,
+  RadioGroupItem,
+  Separator,
+  Skeleton,
+  SoundProvider,
+  Spinner,
+
+  Textarea,
+  Toaster,
+  ToggleGroup,
+  ToggleGroupItem,
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+
+  toast,
+} from "@rapui/react";
+export type { ButtonProps, BadgeVariant, FancyIconName } from "@rapui/react";
