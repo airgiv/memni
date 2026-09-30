@@ -8,9 +8,7 @@ import { TelegramBridge } from "./TelegramBridge";
 export interface Me {
   config: PublicConfig;
   user: { kind: string; displayName: string | null };
-  quota: { used: number; limit: number; left: number };
-  drafts: { id: string; templateId: string; updatedAt: string; assigned: number; sceneConfirmed: boolean; lastJobId: string | null }[];
-  jobs: { id: string; status: string; draftId: string; createdAt: string; isDemo: boolean; input: { templateId: string } }[];
+  drafts: { id: string; templateId: string; updatedAt: string; assigned: number; lastJobId: string | null }[];
 }
 
 const Ctx = createContext<{ me: Me | null; refresh: () => Promise<void> }>({ me: null, refresh: async () => {} });
@@ -35,7 +33,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
         <TooltipProvider>
           <TelegramBridge onLogin={refresh} />
           {children}
-          <Toaster position="top-center" />
+          <Toaster
+            position="top-center"
+            theme="dark"
+            // rapui toasts are ink slabs, which is near-white on the dark palette
+            toastOptions={{
+              classNames: {
+                toast: "bg-paper-3 text-ink shadow-[0_0_0_1px_var(--rap-line),var(--rap-shadow-pop)]",
+                description: "text-mute",
+                actionButton: "bg-accent text-accent-ink hover:bg-accent",
+              },
+            }}
+          />
         </TooltipProvider>
       </SoundProvider>
     </Ctx.Provider>

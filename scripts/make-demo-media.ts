@@ -133,8 +133,39 @@ async function badge(text: string, file: string, bg: string, fg: string) {
   await sharp(Buffer.from(svg)).png().toFile(file);
 }
 
+/**
+ * Role cutouts: one frame of the SOURCE video at the moment each role is
+ * clearly visible (role.cutout.atSec), cropped to the role's region with a
+ * little air around it. Done once per template, never per order.
+ */
+async function cutouts(t: TemplateDef, out: string, tmp: string) {
+  mkdirSync(join(out, "roles"), { recursive: true });
+  mkdirSync(tmp, { recursive: true });
+  for (const role of t.roles) {
+    const still = join(tmp, `${t.id}-${role.id}.png`);
+    ffmpeg(["-ss", String(role.cutout.atSec), "-i", join(out, "source.mp4"), "-frames:v", "1", still]);
+    // a 3:4 portrait from the top of the region: head and shoulders with some air
+    const padX = 0.05 * W;
+    const left = Math.max(0, Math.round(role.region.x * W - padX));
+    const width = Math.min(W - left, Math.round(role.region.w * W + padX * 2));
+    const top = Math.max(0, Math.round(role.region.y * H - 0.04 * H));
+    const height = Math.min(H - top, Math.round((width * 4) / 3));
+    await sharp(still)
+      .extract({ left, top, width, height })
+      .resize({ width: 640, withoutEnlargement: false })
+      .jpeg({ quality: 86 })
+      .toFile(join(process.cwd(), "public", role.cutout.src));
+  }
+}
+
 async function main() {
   const tmp = join(process.cwd(), ".data", "tmp-media");
+  if (process.argv.includes("--cutouts")) {
+    for (const t of TEMPLATES) await cutouts(t, join(process.cwd(), "public", "templates", t.id), tmp);
+    rmSync(tmp, { recursive: true, force: true });
+    console.log("cutouts done");
+    return;
+  }
   for (const t of TEMPLATES) {
     const out = join(process.cwd(), "public", "templates", t.id);
     mkdirSync(out, { recursive: true });
@@ -168,6 +199,7 @@ async function main() {
       "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "30", "-c:a", "copy", "-shortest", "-movflags", "+faststart",
       join(out, "example.mp4"),
     ]);
+    await cutouts(t, out, tmp);
   }
 
   const demo = join(process.cwd(), "public", "demo");

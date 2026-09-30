@@ -51,10 +51,6 @@ export interface LookSettings {
 export interface Assignment {
   personId: ID;
   look: LookSettings;
-  /** preview the user is looking at (any from history) */
-  selectedPreviewId?: ID;
-  /** preview the user confirmed; valid only while its fingerprint matches */
-  confirmedPreviewId?: ID;
 }
 
 export interface SceneSettings {
@@ -70,8 +66,8 @@ export interface Draft {
   version: number;
   assignments: Record<string, Assignment | undefined>;
   scene: SceneSettings;
+  /** scene preview the user is looking at (any from history) */
   sceneSelectedPreviewId?: ID;
-  sceneConfirmedPreviewId?: ID;
   /** last video job started from this draft */
   lastJobId?: ID;
   createdAt: string;
@@ -99,6 +95,8 @@ export interface Preview {
   error?: string;
   /** ordinal inside (draft, kind, role) — «вариант 3» */
   seq: number;
+  /** false → came from the free offer; true → a (test) purchase */
+  paid?: boolean;
   createdAt: string;
   finishedAt?: string;
 }
@@ -113,20 +111,35 @@ export type JobStatus =
   | "needs_review"; // duration mismatch etc. — a human decides
 
 /** Frozen inputs of a job: later draft edits never touch a started generation. */
+export type VideoMode = "preview" | "direct";
+
+export interface Money {
+  amountMinor: number;
+  currency: string;
+  isExample: boolean;
+}
+
+/** Frozen inputs of a job: later draft edits never touch a started generation. */
 export interface JobInput {
   templateId: string;
   templateVersion: number;
   promptVersion: string;
+  /** "preview": animate the chosen scene image; "direct": straight from people's photos */
+  mode: VideoMode;
   prompt: string;
   negativePrompt?: string;
   durationSec: number;
   aspectRatio: string;
-  sceneImageKey: string;
+  /** only in "preview" mode: frozen copy of the chosen scene image */
+  sceneImageKey?: string;
+  scenePreviewId?: ID;
+  /** fingerprint of every draft input at launch */
+  inputsFingerprint: string;
   sourceVideo: { src: string; startSec: number; endSec: number };
   audio: { src: string; startSec: number; endSec: number };
-  people: { roleId: string; personId: ID; referenceKeys: string[]; previewKey?: string }[];
-  scenePreviewId: ID;
-  sceneFingerprint: string;
+  people: { roleId: string; personId: ID; referenceKeys: string[]; look: LookSettings }[];
+  /** price fixed at launch (null = no price defined, test run) */
+  price: Money | null;
   /** demo mode only: simulate a provider failure at this stage */
   demoFail?: "generating";
 }
@@ -172,21 +185,31 @@ export interface UsageEvent {
   provider: string;
   isDemo: boolean;
   refId: ID;
+  /** true → used the free offer (counts against FREE_PREVIEWS_PER_USER) */
+  free?: boolean;
   estimatedCost?: number;
   actualCost?: number;
   currency: string;
   createdAt: string;
 }
 
-/** Test order: the future payment screen, never charged in this version. */
+/**
+ * A purchase. Payments are not connected yet, so every order is a TEST order
+ * ("test_paid"): the flow, prices and idempotency are real, no money moves.
+ */
 export interface Order {
   id: ID;
   userId: ID;
-  jobId: ID;
+  kind: "preview" | "video";
+  /** preview id or job id */
+  refId: ID;
+  /** client/server key: the same purchase is never charged twice */
+  idempotencyKey: string;
   amountMinor: number | null;
   currency: string;
   priceIsExample: boolean;
-  status: "test";
-  method: "none" | "card" | "telegram_stars";
+  status: "test_paid" | "refunded";
+  method: "test";
   createdAt: string;
+  refundedAt?: string;
 }

@@ -55,10 +55,14 @@ export interface Repo {
   listPreviews(userId: string, draftId: string): Promise<Preview[]>;
   getPreview(userId: string, id: string): Promise<Preview | null>;
   /**
-   * Atomically checks the free-preview quota, records a usage event and inserts
-   * the pending preview. Throws LimitError when the quota is spent.
+   * Atomically inserts the pending preview with its usage event and either
+   *  - `freeLimit`: checks the free offer (LimitError "preview_limit" when used up), or
+   *  - `order`: records the (test) purchase; if an order with the same
+   *    idempotency key exists, nothing is inserted and its preview is returned.
    */
-  reservePreview(preview: Preview, usage: UsageEvent, limit: number): Promise<Preview>;
+  reservePreview(preview: Preview, usage: UsageEvent, opts: { freeLimit?: number; order?: Order }): Promise<{ preview: Preview; reused: boolean }>;
+  /** free-offer previews used (not refunded) */
+  countFreePreviews(userId: string): Promise<number>;
   updatePreview(id: string, patch: Partial<Preview>): Promise<Preview>;
   /** Refund quota when a preview failed on our side (network, safety block). */
   refundUsage(refId: string): Promise<void>;
@@ -88,9 +92,11 @@ export interface Repo {
   deleteJob(userId: string, id: string): Promise<string[]>;
   recordResultFile(f: { userId: string; jobId: string; kind: "raw" | "final"; storageKey: string; durationSec?: number; hasAudio?: boolean }): Promise<void>;
 
-  // orders (test only)
+  // purchases (test orders until payments are connected)
   createOrder(order: Order): Promise<Order>;
-  getOrderForJob(userId: string, jobId: string): Promise<Order | null>;
+  getOrderForRef(userId: string, refId: string): Promise<Order | null>;
+  /** give the money (test) back when a paid generation failed on our side */
+  refundOrderForRef(refId: string): Promise<void>;
 }
 
 export const ACTIVE_JOB_STATUSES = ["queued", "submitting", "generating", "assembling"] as const;

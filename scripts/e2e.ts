@@ -1,13 +1,14 @@
 /**
- * End-to-end check of the whole demo flow over HTTP, against a running server
- * and worker (npm run build && npm start, npm run worker).
+ * End-to-end check of the demo flow over HTTP, against a running server and
+ * worker (npm run build && npm start, npm run worker).
  *
  *   BASE_URL=http://localhost:3000 npm run e2e
  *
- * Covers: drafts, people, photo validation, role assignment and swap,
- * confirmation removal after changes, stale-answer protection, preview limit,
- * idempotent video start, worker stages, original audio in the result,
- * failure + manual retry, ownership isolation between two users.
+ * Both paths: participants → shared preview → video, and participants → video
+ * directly. Plus: draft resume, saved people and «не сохранять», no per-person
+ * generations, stale previews, paid repeat previews and free switching, no
+ * double charge / double job, failures with refunds, ownership isolation,
+ * original audio in the result.
  */
 import assert from "node:assert/strict";
 import { mkdtemp, writeFile } from "node:fs/promises";
@@ -21,15 +22,16 @@ const BASE = process.env.BASE_URL ?? "http://localhost:3000";
 class Client {
   cookies = new Map<string, string>();
   constructor(public name: string) {}
-  private header() {
-    return [...this.cookies].map(([k, v]) => `${k}=${v}`).join("; ");
-  }
   async req(path: string, init: RequestInit & { json?: unknown } = {}) {
     const { json, ...rest } = init;
     const res = await fetch(BASE + path, {
       ...rest,
       redirect: "manual",
-      headers: { cookie: this.header(), ...(json !== undefined ? { "content-type": "application/json" } : {}), ...(rest.headers ?? {}) },
+      headers: {
+        cookie: [...this.cookies].map(([k, v]) => `${k}=${v}`).join("; "),
+        ...(json !== undefined ? { "content-type": "application/json" } : {}),
+        ...(rest.headers ?? {}),
+      },
       body: json !== undefined ? JSON.stringify(json) : rest.body,
     });
     for (const c of res.headers.getSetCookie()) {
@@ -39,6 +41,7 @@ class Client {
     }
     return res;
   }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   async json<T = any>(path: string, init: RequestInit & { json?: unknown } = {}, expect = 200): Promise<T> {
     const res = await this.req(path, init);
     const body = await res.json().catch(() => null);
@@ -48,263 +51,209 @@ class Client {
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-let step = 0;
-const ok = (msg: string) => console.log(`  ✓ ${++step}. ${msg}`);
+let n = 0;
+const ok = (msg: string) => console.log(`  ✓ ${++n}. ${msg}`);
 
-async function testPhoto(hue: number, w = 900, h = 1200): Promise<Blob> {
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}"><rect width="100%" height="100%" fill="hsl(${hue},60%,70%)"/><circle cx="${w / 2}" cy="${h / 3}" r="${w / 5}" fill="#f1d3b5"/><rect x="${w / 4}" y="${h / 2}" width="${w / 2}" height="${h / 2}" rx="60" fill="hsl(${hue},60%,40%)"/></svg>`;
-  const buf = await sharp(Buffer.from(svg)).jpeg().toBuffer();
-  return new Blob([new Uint8Array(buf)], { type: "image/jpeg" });
+async function photo(hue: number, w = 900, h = 1200): Promise<Blob> {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}"><rect width="100%" height="100%" fill="hsl(${hue},60%,70%)"/><circle cx="${w / 2}" cy="${h / 3}" r="${w / 5}" fill="#f1d3b5"/></svg>`;
+  return new Blob([new Uint8Array(await sharp(Buffer.from(svg)).jpeg().toBuffer())], { type: "image/jpeg" });
 }
-
-async function upload(c: Client, personId: string, blob: Blob, expect = 201) {
+async function upload(c: Client, draftId: string, roleId: string, blob: Blob, opts: { save?: boolean; expect?: number } = {}) {
   const fd = new FormData();
   fd.append("file", blob, "photo.jpg");
-  return c.json(`/api/people/${personId}/photos`, { method: "POST", body: fd }, expect);
+  if (opts.save === false) fd.append("save", "false");
+  return c.json(`/api/drafts/${draftId}/roles/${roleId}/photos`, { method: "POST", body: fd }, opts.expect ?? 201);
 }
-
-async function waitDraft(c: Client, draftId: string, pred: (d: any) => boolean, what: string, ms = 20000) {
-  const until = Date.now() + ms;
-  while (Date.now() < until) {
-    const d = await c.json(`/api/drafts/${draftId}`);
-    if (pred(d)) return d;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function until<T>(fn: () => Promise<T>, pred: (x: T) => boolean, what: string, ms = 60_000): Promise<T> {
+  const end = Date.now() + ms;
+  while (Date.now() < end) {
+    const x = await fn();
+    if (pred(x)) return x;
     await sleep(400);
   }
-  throw new Error(`timeout waiting for ${what}`);
+  throw new Error(`timeout: ${what}`);
 }
 
 async function main() {
   console.log(`E2E against ${BASE}`);
   const a = new Client("A");
   const b = new Client("B");
-
   const me = await a.json("/api/me");
   assert.equal(me.config.isDemo, true, "e2e expects demo mode");
   await a.json("/api/demo", { method: "POST", json: { resetQuota: true } });
-  ok("session created, demo mode");
 
+  // meme → «Сделать с собой»; opening again resumes the same draft
   const { id: draftId } = await a.json("/api/drafts", { method: "POST", json: { templateId: "hotel-lobby" } }, 201);
+  const again = await a.json("/api/drafts", { method: "POST", json: { templateId: "hotel-lobby" } }, 201);
+  assert.equal(again.id, draftId);
   let d = await a.json(`/api/drafts/${draftId}`);
   assert.equal(d.roles.length, 2);
-  ok("draft for Hotel Lobby with 2 roles");
+  assert.equal(d.ready, false);
+  ok("meme opens a draft; opening it again resumes the same draft");
 
-  const sasha = await a.json("/api/people", { method: "POST", json: { name: "Саша", saved: true } }, 201);
-  const masha = await a.json("/api/people", { method: "POST", json: { name: "Маша", saved: false } }, 201);
-
-  // photo validation
-  const bad = await upload(a, sasha.id, new Blob([new TextEncoder().encode("not an image")], { type: "image/jpeg" }), 400);
-  assert.match(bad.error, /JPEG|открыть/);
-  const small = await upload(a, sasha.id, await testPhoto(10, 300, 300), 400);
-  assert.match(small.error, /маленькое/);
-  ok("rejects non-image and too-small photo with clear messages");
-  const p1 = await upload(a, sasha.id, await testPhoto(20));
-  await upload(a, sasha.id, await testPhoto(40));
-  await upload(a, masha.id, await testPhoto(200));
-  ok("uploaded photos (stored privately, EXIF stripped)");
-
-  d = await a.json(`/api/drafts/${draftId}`, { method: "PATCH", json: { op: "assign", roleId: "mic-left", personId: sasha.id, version: d.version } });
-  d = await a.json(`/api/drafts/${draftId}`, { method: "PATCH", json: { op: "assign", roleId: "mic-right", personId: masha.id, version: d.version } });
-  assert.equal(d.roles[0].person.name, "Саша");
-  assert.equal(d.roles[1].person.name, "Маша");
-  // stale version → conflict
-  const conflict = await a.req(`/api/drafts/${draftId}`, { method: "PATCH", json: { op: "clear", roleId: "mic-left", version: d.version - 1 } });
-  assert.equal(conflict.status, 409);
-  ok("roles assigned; outdated version gets 409 (no lost updates)");
-
-  d = await a.json(`/api/drafts/${draftId}`, { method: "PATCH", json: { op: "swap", roleA: "mic-left", roleB: "mic-right", version: d.version } });
-  assert.equal(d.roles[0].person.name, "Маша");
-  d = await a.json(`/api/drafts/${draftId}`, { method: "PATCH", json: { op: "assign", roleId: "mic-left", personId: sasha.id, version: d.version } });
-  assert.equal(d.roles[0].person.name, "Саша");
-  assert.equal(d.roles[1].person.name, "Маша", "assigning a person from another role swaps them");
-  ok("swap and swap-by-assign work");
-
-  // person previews
-  const gen = await a.json(`/api/drafts/${draftId}/previews`, { method: "POST", json: { roleId: "mic-left" } }, 202);
-  const dup = await a.json(`/api/drafts/${draftId}/previews`, { method: "POST", json: { roleId: "mic-left" } }, 200);
-  assert.equal(dup.reused, true);
-  assert.equal(dup.preview.id, gen.preview.id);
-  ok("second click while generating reuses the running request (no second paid call)");
-  d = await waitDraft(a, draftId, (x) => x.roles[0].previews.some((p: any) => p.status === "ready"), "left preview");
-  assert.equal(d.roles[0].selectedPreviewId, gen.preview.id);
-  const imgRes = await a.req(d.roles[0].previews[0].url);
-  assert.equal(imgRes.status, 200);
-  assert.equal(imgRes.headers.get("content-type"), "image/jpeg");
-  ok("person preview ready, selected, served only through the owner check");
-
-  // stale answer: start a preview, then change the look before it finishes
-  const g2 = await a.json(`/api/drafts/${draftId}/previews`, { method: "POST", json: { roleId: "mic-left" } }, 202);
+  // participant 1: invalid files create nothing
+  await upload(a, draftId, "mic-left", new Blob([new TextEncoder().encode("nope")], { type: "image/jpeg" }), { expect: 400 });
+  await upload(a, draftId, "mic-left", await photo(10, 300, 300), { expect: 400 });
+  assert.equal((await a.json(`/api/drafts/${draftId}`)).roles[0].person, null);
+  const up1 = await upload(a, draftId, "mic-left", await photo(20));
+  await upload(a, draftId, "mic-left", await photo(40));
   d = await a.json(`/api/drafts/${draftId}`);
-  d = await a.json(`/api/drafts/${draftId}`, { method: "PATCH", json: { op: "look", roleId: "mic-left", look: { clothing: "template" }, version: d.version } });
-  d = await waitDraft(a, draftId, (x) => x.roles[0].previews.find((p: any) => p.id === g2.preview.id)?.status === "ready", "stale preview");
-  assert.notEqual(d.roles[0].selectedPreviewId, g2.preview.id, "late answer must not become the current variant");
-  const stale = d.roles[0].previews.find((p: any) => p.id === g2.preview.id);
-  assert.notEqual(stale.fingerprint, d.roles[0].fingerprint);
-  const staleConfirm = await a.req(`/api/drafts/${draftId}`, { method: "PATCH", json: { op: "confirm", roleId: "mic-left", previewId: g2.preview.id, version: d.version } });
-  assert.equal(staleConfirm.status, 400);
-  ok("late answer for old settings stays in history, is not auto-selected and cannot be confirmed");
+  assert.equal(d.roles[0].person.id, up1.personId);
+  assert.equal(d.roles[0].person.photos.length, 2, "same person, no duplicate");
+  assert.equal(d.roles[0].person.saved, true, "saved by default");
+  assert.equal(d.roles[0].look.clothing, "template", "default look");
+  ok("participant 1: bad files rejected without side effects; 2 photos → one saved person");
 
-  // back to the original look → old variant #1 matches again and can be confirmed for free
-  d = await a.json(`/api/drafts/${draftId}`, { method: "PATCH", json: { op: "look", roleId: "mic-left", look: { clothing: "photo" }, version: d.version } });
-  const before = (await a.json("/api/me")).quota.used;
-  d = await a.json(`/api/drafts/${draftId}`, { method: "PATCH", json: { op: "confirm", roleId: "mic-left", previewId: gen.preview.id, version: d.version } });
-  assert.equal(d.roles[0].confirmedPreviewId, gen.preview.id);
-  assert.equal((await a.json("/api/me")).quota.used, before, "confirm is free");
-  ok("returning to earlier settings revives the old variant; confirming spends nothing");
-
-  // confirmation removed by a change
-  await upload(a, sasha.id, await testPhoto(60));
+  d = await a.json(`/api/drafts/${draftId}`, { method: "PATCH", json: { op: "look", roleId: "mic-left", look: { clothing: "preset", presetId: "suit" }, version: d.version } });
+  assert.equal(d.roles[0].look.presetId, "suit");
+  const up2 = await upload(a, draftId, "mic-right", await photo(200), { save: false });
   d = await a.json(`/api/drafts/${draftId}`);
-  assert.equal(d.roles[0].confirmedPreviewId, null, "new photo drops the confirmation");
-  assert.ok(d.cleared.some((c: any) => c.roleId === "mic-left"));
-  ok("adding a photo removes the confirmation (old variant kept in history)");
-  await a.json(`/api/photos/${(await a.json("/api/people")).find((p: any) => p.id === sasha.id).photos.at(-1).id}`, { method: "DELETE" });
+  assert.equal(d.roles[1].person.saved, false, "«Не сохранять» keeps them out of the library");
+  assert.equal(d.ready, true);
+  assert.equal(d.previews.length, 0, "no per-person generations happened");
+  ok("participant 2 with «Не сохранять»; looks stored per order; no per-person previews");
+
+  // saved people: participant 1 is offered in a new draft, participant 2 is not
+  const lib = (await a.json("/api/people")).filter((p: { saved: boolean }) => p.saved).map((p: { id: string }) => p.id);
+  assert.ok(lib.includes(up1.personId) && !lib.includes(up2.personId));
+  ok("library: saved person listed, unsaved one is not");
+
+  // preview 1: free, double click reuses the request
+  assert.equal(d.quotes.preview.free, true);
+  const p1 = await a.json(`/api/drafts/${draftId}/previews`, { method: "POST", json: {} }, 202);
+  const dup = await a.json(`/api/drafts/${draftId}/previews`, { method: "POST", json: {} }, 200);
+  assert.equal(dup.preview.id, p1.preview.id);
+  d = await until(() => a.json(`/api/drafts/${draftId}`), (x) => x.previews.some((p: { status: string }) => p.status === "ready"), "preview 1");
+  assert.equal(d.selectedPreviewId, p1.preview.id);
+  assert.equal(d.previews[0].actual, true);
+  assert.equal(d.quotes.preview.free, false, "the free offer is used up — reloading does not give another");
+  const img = await a.req(d.previews[0].url);
+  assert.equal(img.status, 200);
+  ok("first shared preview is free; a double click does not start a second one");
+
+  // preview 2: paid; needs the confirmed price; same purchase key → same preview
+  const price = d.quotes.preview.price.amountMinor;
+  const noPrice = await a.req(`/api/drafts/${draftId}/previews`, { method: "POST", json: {} });
+  assert.equal(noPrice.status, 402);
+  assert.equal((await noPrice.json()).quote.price.amountMinor, price);
+  const wrong = await a.req(`/api/drafts/${draftId}/previews`, { method: "POST", json: { acceptAmountMinor: 1, purchaseKey: "k-wrong" } });
+  assert.equal(wrong.status, 402);
+  const [r1, r2] = await Promise.all([
+    a.req(`/api/drafts/${draftId}/previews`, { method: "POST", json: { acceptAmountMinor: price, purchaseKey: "k-1" } }),
+    a.req(`/api/drafts/${draftId}/previews`, { method: "POST", json: { acceptAmountMinor: price, purchaseKey: "k-1" } }),
+  ]);
+  const ids = [(await r1.json()).preview.id, (await r2.json()).preview.id];
+  assert.equal(ids[0], ids[1], "the same purchase never creates two previews");
+  d = await until(() => a.json(`/api/drafts/${draftId}`), (x) => x.previews.length === 2 && x.previews.every((p: { status: string }) => p.status === "ready"), "preview 2");
+  assert.equal(d.previews[1].paid, true);
+  ok(`repeat preview is paid (${price / 100} ₽ quoted and confirmed); a double purchase with one key → one preview`);
+
+  // switching back to variant 1 is free
+  d = await a.json(`/api/drafts/${draftId}`, { method: "PATCH", json: { op: "select", previewId: p1.preview.id, version: d.version } });
+  assert.equal(d.selectedPreviewId, p1.preview.id);
+  assert.equal(d.previews.length, 2);
+  ok("switching to an earlier variant is free and generates nothing");
+
+  // changes make previews non-actual; an outdated preview is never sent to video
+  const extra = await upload(a, draftId, "mic-left", await photo(60));
   d = await a.json(`/api/drafts/${draftId}`);
-  d = await a.json(`/api/drafts/${draftId}`, { method: "PATCH", json: { op: "confirm", roleId: "mic-left", previewId: gen.preview.id, version: d.version } });
+  assert.ok(d.previews.every((p: { actual: boolean }) => !p.actual), "both previews became non-actual");
+  const vp = d.quotes.video.price?.amountMinor ?? null;
+  const stale = await a.req(`/api/drafts/${draftId}/video`, { method: "POST", json: { mode: "preview", previewId: p1.preview.id, acceptAmountMinor: vp } });
+  assert.equal(stale.status, 409);
+  await a.json(`/api/photos/${extra.photo.id}`, { method: "DELETE" });
+  d = await a.json(`/api/drafts/${draftId}`);
+  assert.ok(d.previews.every((p: { actual: boolean }) => p.actual), "back to the same inputs → actual again");
+  ok("new photo → previews kept but not actual; outdated preview rejected for video; undo restores them");
 
-  await a.json(`/api/drafts/${draftId}/previews`, { method: "POST", json: { roleId: "mic-right" } }, 202);
-  d = await waitDraft(a, draftId, (x) => x.roles[1].previews.some((p: any) => p.status === "ready"), "right preview");
-  d = await a.json(`/api/drafts/${draftId}`, { method: "PATCH", json: { op: "confirm", roleId: "mic-right", previewId: d.roles[1].selectedPreviewId, version: d.version } });
-  ok("both looks confirmed");
-
-  // scene
-  const sg = await a.json(`/api/drafts/${draftId}/previews`, { method: "POST", json: {} }, 202);
-  d = await waitDraft(a, draftId, (x) => x.scene.previews.some((p: any) => p.id === sg.preview.id && p.status === "ready"), "scene");
-  d = await a.json(`/api/drafts/${draftId}`, { method: "PATCH", json: { op: "confirm", previewId: sg.preview.id, version: d.version } });
-  assert.equal(d.scene.confirmedPreviewId, sg.preview.id);
-  assert.equal(d.video.canStart, true);
-  // swapping roles drops both person and scene confirmations
-  d = await a.json(`/api/drafts/${draftId}`, { method: "PATCH", json: { op: "swap", roleA: "mic-left", roleB: "mic-right", version: d.version } });
-  assert.equal(d.scene.confirmedPreviewId, null);
-  assert.equal(d.roles[0].confirmedPreviewId, null);
-  d = await a.json(`/api/drafts/${draftId}`, { method: "PATCH", json: { op: "swap", roleA: "mic-left", roleB: "mic-right", version: d.version } });
-  assert.equal(d.scene.confirmedPreviewId, null, "swapping back does not silently re-confirm");
-  for (const r of d.roles) {
-    const prev = r.previews.find((p: any) => p.fingerprint === r.fingerprint && p.status === "ready");
-    d = await a.json(`/api/drafts/${draftId}`, { method: "PATCH", json: { op: "confirm", roleId: r.roleId, previewId: prev.id, version: d.version } });
-  }
-  d = await a.json(`/api/drafts/${draftId}`, { method: "PATCH", json: { op: "confirm", previewId: sg.preview.id, version: d.version } });
-  ok("scene confirmed; swap removes it; re-confirming old matching variants is free");
-
-  // video, idempotent
-  const v1 = await a.json(`/api/drafts/${draftId}/video`, { method: "POST" }, 201);
-  const [v2, v3] = await Promise.all([a.req(`/api/drafts/${draftId}/video`, { method: "POST" }), a.req(`/api/drafts/${draftId}/video`, { method: "POST" })]);
-  for (const r of [v2, v3]) {
+  // path A: video from the chosen preview; price required; no duplicates
+  const noVideoPrice = await a.req(`/api/drafts/${draftId}/video`, { method: "POST", json: { mode: "preview", previewId: p1.preview.id } });
+  assert.equal(noVideoPrice.status, 402);
+  const v1 = await a.json(`/api/drafts/${draftId}/video`, { method: "POST", json: { mode: "preview", previewId: p1.preview.id, acceptAmountMinor: vp } }, 201);
+  const dupV = await Promise.all([1, 2].map(() => a.req(`/api/drafts/${draftId}/video`, { method: "POST", json: { mode: "preview", previewId: p1.preview.id, acceptAmountMinor: vp } })));
+  for (const r of dupV) {
     assert.equal(r.status, 200);
     assert.equal((await r.json()).job.id, v1.job.id);
   }
-  ok("repeated and parallel «Создать видео» return the same job");
+  assert.equal(v1.job.mode, "preview");
+  ok("path A (with preview): price confirmed, repeated and parallel clicks → one job");
 
-  // draft changes after start do not touch the job
-  d = await a.json(`/api/drafts/${draftId}`);
-  d = await a.json(`/api/drafts/${draftId}`, { method: "PATCH", json: { op: "look", roleId: "mic-right", look: { clothing: "template" }, version: d.version } });
+  const waitJob = (id: string) => until(() => a.json(`/api/jobs/${id}`), (x) => ["ready", "failed", "needs_review"].includes(x.job.status), `job ${id}`, 90_000);
+  let res = await waitJob(v1.job.id);
+  assert.equal(res.job.status, "ready", res.job.error);
+  assert.equal(res.order.status, "test_paid");
+  assert.equal(res.order.amountMinor, vp);
+  const file = join(await mkdtemp(join(tmpdir(), "memni-e2e-")), "a.mp4");
+  const dl = await a.req(`/api/files/job/${v1.job.id}?download=1`);
+  assert.match(dl.headers.get("content-disposition") ?? "", /attachment/);
+  await writeFile(file, Buffer.from(await dl.arrayBuffer()));
+  let meta = await probe(file);
+  assert.ok(meta.hasAudio && Math.abs(meta.durationSec - 8) < 0.2, JSON.stringify(meta));
+  ok(`path A result: ${meta.durationSec.toFixed(2)} s with the original audio (ffprobe); test purchase recorded once`);
 
-  const seen = new Set<string>();
-  let job: any;
-  const until = Date.now() + 90_000;
-  while (Date.now() < until) {
-    job = (await a.json(`/api/jobs/${v1.job.id}`)).job;
-    seen.add(job.status);
-    if (["ready", "failed", "needs_review"].includes(job.status)) break;
-    await sleep(500);
-  }
-  assert.equal(job.status, "ready", `job ended as ${job.status}: ${job.error}`);
-  assert.ok(seen.has("generating"), `stages seen: ${[...seen].join(",")}`);
-  ok(`job went through ${[...seen].join(" → ")}`);
-
-  const video = await a.req(`/api/files/job/${v1.job.id}?download=1`);
-  assert.equal(video.status, 200);
-  assert.match(video.headers.get("content-disposition") ?? "", /attachment/);
-  const dir = await mkdtemp(join(tmpdir(), "memni-e2e-"));
-  const file = join(dir, "result.mp4");
-  await writeFile(file, Buffer.from(await video.arrayBuffer()));
-  const meta = await probe(file);
-  assert.ok(meta.hasAudio, "result must contain audio");
-  assert.ok(Math.abs(meta.durationSec - 8) < 0.2, `duration ${meta.durationSec}`);
-  const range = await a.req(`/api/files/job/${v1.job.id}`, { headers: { range: "bytes=0-99" } });
-  assert.equal(range.status, 206);
-  ok(`result downloaded: ${meta.durationSec.toFixed(2)} s, audio stream present (ffprobe), Range works`);
+  // path B: straight to video, no preview used, no hidden picture
+  const beforePreviews = (await a.json(`/api/drafts/${draftId}`)).previews.length;
+  const v2 = await a.json(`/api/drafts/${draftId}/video`, { method: "POST", json: { mode: "direct", acceptAmountMinor: vp } }, 201);
+  const v2b = await a.json(`/api/drafts/${draftId}/video`, { method: "POST", json: { mode: "direct", acceptAmountMinor: vp } }, 200);
+  assert.equal(v2b.job.id, v2.job.id);
+  res = await waitJob(v2.job.id);
+  assert.equal(res.job.status, "ready", res.job.error);
+  assert.equal(res.job.mode, "direct");
+  assert.equal((await a.json(`/api/drafts/${draftId}`)).previews.length, beforePreviews, "no hidden preview generated");
+  const file2 = join(await mkdtemp(join(tmpdir(), "memni-e2e-")), "b.mp4");
+  await writeFile(file2, Buffer.from(await (await a.req(`/api/files/job/${v2.job.id}`)).arrayBuffer()));
+  meta = await probe(file2);
+  assert.ok(meta.hasAudio && Math.abs(meta.durationSec - 8) < 0.2);
+  assert.equal((await a.req(`/api/files/jobscene/${v2.job.id}`)).status, 404, "direct job has no scene image");
+  ok("path B (straight to video): one job, no hidden preview, original audio present");
 
   // ownership
   await b.json("/api/me");
-  for (const path of [`/api/drafts/${draftId}`, `/api/jobs/${v1.job.id}`, `/api/files/job/${v1.job.id}`, `/api/files/photo/${p1.photo.id}`, `/api/files/preview/${gen.preview.id}`]) {
-    const r = await b.req(path);
-    assert.equal(r.status, 404, `${path} must be hidden from another user, got ${r.status}`);
+  for (const path of [`/api/drafts/${draftId}`, `/api/jobs/${v1.job.id}`, `/api/files/job/${v1.job.id}`, `/api/files/photo/${up1.photo.id}`, `/api/files/preview/${p1.preview.id}`]) {
+    assert.equal((await b.req(path)).status, 404, path);
   }
-  const hijack = await b.req(`/api/drafts/${draftId}`, { method: "PATCH", json: { op: "clear", roleId: "mic-left", version: 1 } });
-  assert.equal(hijack.status, 404);
-  const steal = await b.req(`/api/people/${sasha.id}`, { method: "DELETE" });
-  assert.equal(steal.status, 404);
-  const forged = await b.req(`/api/drafts/${draftId}`, { headers: { cookie: `memni_sid=${[...a.cookies.values()][0].split(".")[0]}.forged` } });
-  assert.equal(forged.status, 404);
-  ok("another user gets 404 for drafts, jobs, files, people; forged session cookie is rejected");
+  assert.equal((await b.req(`/api/drafts/${draftId}/video`, { method: "POST", json: { mode: "direct", acceptAmountMinor: vp } })).status, 404);
+  assert.equal((await b.req(`/api/people/${up1.personId}`, { method: "DELETE" })).status, 404);
+  ok("another user gets 404 for draft, job, files, video start, people");
 
-  // failure + manual retry within budget
-  const { id: soloDraft } = await a.json("/api/drafts", { method: "POST", json: { templateId: "morning-show", fromDraftId: draftId } }, 201);
-  d = await a.json(`/api/drafts/${soloDraft}`);
-  assert.equal(d.roles[0].person.id, sasha.id, "«another meme with the same people» carries people over");
-  await a.json("/api/demo", { method: "POST", json: { failPreview: true } });
-  const fp = await a.json(`/api/drafts/${soloDraft}/previews`, { method: "POST", json: { roleId: "host" } }, 202);
-  d = await waitDraft(a, soloDraft, (x) => x.roles[0].previews.find((p: any) => p.id === fp.preview.id)?.status === "failed", "failed preview");
-  ok("demo preview failure shown as an error; quota refunded");
-  await a.json("/api/demo", { method: "POST", json: { failPreview: false, failVideo: true, resetQuota: true } });
-  await a.json(`/api/drafts/${soloDraft}/previews`, { method: "POST", json: { roleId: "host" } }, 202);
-  d = await waitDraft(a, soloDraft, (x) => x.roles[0].previews.some((p: any) => p.status === "ready"), "solo preview");
-  d = await a.json(`/api/drafts/${soloDraft}`, { method: "PATCH", json: { op: "confirm", roleId: "host", previewId: d.roles[0].selectedPreviewId, version: d.version } });
-  const ss = await a.json(`/api/drafts/${soloDraft}/previews`, { method: "POST", json: {} }, 202);
-  d = await waitDraft(a, soloDraft, (x) => x.scene.previews.some((p: any) => p.id === ss.preview.id && p.status === "ready"), "solo scene");
-  d = await a.json(`/api/drafts/${soloDraft}`, { method: "PATCH", json: { op: "confirm", previewId: ss.preview.id, version: d.version } });
-  const fj = await a.json(`/api/drafts/${soloDraft}/video`, { method: "POST" }, 201);
-  const waitJob = async (id: string, statuses: string[]) => {
-    const end = Date.now() + 60_000;
-    while (Date.now() < end) {
-      const j = (await a.json(`/api/jobs/${id}`)).job;
-      if (statuses.includes(j.status)) return j;
-      await sleep(500);
-    }
-    throw new Error("job timeout");
-  };
-  let j = await waitJob(fj.job.id, ["failed", "ready"]);
-  assert.equal(j.status, "failed");
-  assert.equal(j.retryable, true);
-  ok(`video failure reported: «${j.error}»`);
-  await a.json("/api/demo", { method: "POST", json: { failVideo: false } });
-  // the flag was frozen into the job input — retry keeps failing until the budget is spent
+  // «Сделать ещё» with the same people
+  const { id: soloId } = await a.json("/api/drafts", { method: "POST", json: { templateId: "morning-show", fromDraftId: draftId } }, 201);
+  d = await a.json(`/api/drafts/${soloId}`);
+  assert.equal(d.roles[0].person.id, up1.personId);
+  ok("«Сделать ещё»: people carried over");
+
+  // failures give the free credit / the payment back
+  await a.json("/api/demo", { method: "POST", json: { resetQuota: true, failPreview: true } });
+  const fp = await a.json(`/api/drafts/${soloId}/previews`, { method: "POST", json: {} }, 202);
+  d = await until(() => a.json(`/api/drafts/${soloId}`), (x) => x.previews.find((p: { id: string }) => p.id === fp.preview.id)?.status === "failed", "failed preview");
+  assert.equal(d.quotes.preview.free, true, "a failed free preview does not use the offer");
+  ok("failed preview: shown as an error, the free preview is restored");
+
+  await a.json("/api/demo", { method: "POST", json: { failPreview: false, failVideo: true } });
+  const fj = await a.json(`/api/drafts/${soloId}/video`, { method: "POST", json: { mode: "direct", acceptAmountMinor: (await a.json(`/api/drafts/${soloId}`)).quotes.video.price?.amountMinor ?? null } }, 201);
+  res = await waitJob(fj.job.id);
+  assert.equal(res.job.status, "failed");
+  assert.equal(res.job.retryable, true);
+  assert.equal(res.order.status, "test_paid", "retry is still covered by the payment");
+  assert.doesNotMatch(res.job.error, /demo|kling|gemini|api/i);
   await a.json(`/api/jobs/${fj.job.id}/retry`, { method: "POST" });
-  j = await waitJob(fj.job.id, ["failed", "ready"]);
-  assert.equal(j.attempts, 2);
-  const noMore = await a.req(`/api/jobs/${fj.job.id}/retry`, { method: "POST" });
-  assert.equal(noMore.status, 429);
-  ok("manual retry works; attempt budget stops further retries (no endless regeneration)");
+  res = await waitJob(fj.job.id);
+  assert.equal(res.job.status, "failed");
+  assert.equal(res.job.retryable, false);
+  assert.equal(res.order.status, "refunded", "attempts spent → payment returned");
+  assert.equal((await a.req(`/api/jobs/${fj.job.id}/retry`, { method: "POST" })).status, 429);
+  await a.json("/api/demo", { method: "POST", json: { failVideo: false } });
+  ok(`video failure: «${res.job.error}»; free retry, then refund; no endless retries`);
 
-  // preview limit
-  await a.json("/api/demo", { method: "POST", json: { resetQuota: true } });
-  const limit = (await a.json("/api/me")).quota.limit;
-  let last: Response | null = null;
-  for (let i = 0; i <= limit; i++) {
-    d = await a.json(`/api/drafts/${soloDraft}`);
-    d = await a.json(`/api/drafts/${soloDraft}`, { method: "PATCH", json: { op: "look", roleId: "host", look: { clothing: i % 2 ? "photo" : "template" }, version: d.version } });
-    last = await a.req(`/api/drafts/${soloDraft}/previews`, { method: "POST", json: { roleId: "host" } });
-    if (last.status === 429) break;
-    await waitDraft(a, soloDraft, (x) => !x.roles[0].previews.some((p: any) => p.status === "pending"), "limit loop");
-  }
-  assert.equal(last?.status, 429);
-  const body = await last!.json();
-  assert.equal(body.code, "preview_limit");
-  const q = (await a.json("/api/me")).quota;
-  assert.equal(q.left, 0);
-  ok(`preview limit (${limit}) enforced on the server: «${body.error}»`);
+  // deleting a saved person removes their files
+  assert.equal((await a.req(`/api/files/photo/${up1.photo.id}`)).status, 200);
+  await a.json(`/api/people/${up1.personId}`, { method: "DELETE" });
+  assert.equal((await a.req(`/api/files/photo/${up1.photo.id}`)).status, 404);
+  assert.equal((await a.json(`/api/drafts/${draftId}`)).roles[0].person, null);
+  ok("person deleted from the library with their photos; their role is freed");
 
-  // deleting a person removes their files
-  const mashaPhoto = (await a.json("/api/people")).find((p: any) => p.id === masha.id).photos[0].id;
-  assert.equal((await a.req(`/api/files/photo/${mashaPhoto}`)).status, 200);
-  const del = await a.json(`/api/people/${masha.id}`, { method: "DELETE" });
-  assert.ok(del.removedFiles > 0);
-  assert.equal((await a.req(`/api/files/photo/${mashaPhoto}`)).status, 404);
-  d = await a.json(`/api/drafts/${draftId}`);
-  assert.equal(d.roles[1].person, null, "role freed after deletion");
-  ok(`person deleted with ${del.removedFiles} files; role freed`);
-
-  console.log(`\nAll ${step} checks passed.`);
+  console.log(`\nAll ${n} checks passed.`);
 }
 
 main().catch((e) => {

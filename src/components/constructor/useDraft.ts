@@ -36,9 +36,7 @@ export function useDraft(id: string) {
     void reload();
   }, [reload]);
 
-  const pending =
-    Boolean(draft?.roles.some((r) => r.previews.some((p) => p.status === "pending"))) ||
-    Boolean(draft?.scene.previews.some((p) => p.status === "pending"));
+  const pending = Boolean(draft?.previews.some((p) => p.status === "pending"));
   usePolling(() => void reload(), 1500, pending);
 
   /** Run one change; on a version conflict reload and try once more. */

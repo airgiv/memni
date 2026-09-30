@@ -5,23 +5,12 @@ export interface ImageRef {
   mime: string;
 }
 
-export interface PersonPreviewRequest {
-  template: TemplateDef;
-  role: TemplateRole;
-  prompt: string;
-  /** main photo first, then extra references */
-  photos: ImageRef[];
-  referenceFrame: ImageRef;
-  /** ordinal of this variant; lets a demo adapter look different per try */
-  variant: number;
-  demo?: { fail?: boolean };
-}
-
 export interface ScenePreviewRequest {
   template: TemplateDef;
   prompt: string;
   referenceFrame: ImageRef;
-  people: { role: TemplateRole; approved: ImageRef; mainPhoto?: ImageRef }[];
+  /** each cast person with their photos, main photo first */
+  people: { role: TemplateRole; photos: ImageRef[] }[];
   variant: number;
   demo?: { fail?: boolean };
 }
@@ -52,6 +41,5 @@ export interface ImageProvider {
   readonly isDemo: boolean;
   /** max reference images the model accepts in one call */
   readonly maxReferences: number;
-  person(req: PersonPreviewRequest): Promise<ImageResult>;
   scene(req: ScenePreviewRequest): Promise<ImageResult>;
 }

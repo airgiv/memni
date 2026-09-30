@@ -16,7 +16,7 @@
  * NOT yet exercised with a real key — see README «Что проверено».
  */
 import type { AppConfig } from "../../config";
-import { ImageProviderError, type ImageProvider, type ImageRef, type ImageResult, type PersonPreviewRequest, type ScenePreviewRequest } from "./types";
+import { ImageProviderError, type ImageProvider, type ImageRef, type ImageResult, type ScenePreviewRequest } from "./types";
 
 const ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models";
 
@@ -83,23 +83,14 @@ export class GeminiImageProvider implements ImageProvider {
     return { bytes: Buffer.from(image.data, "base64"), mime: image.mimeType, estimatedCostUsd: this.cfg.estimatedCostUsd };
   }
 
-  person(req: PersonPreviewRequest) {
-    const photos = req.photos.slice(0, this.maxReferences - 1);
-    return this.call(
-      [{ text: req.prompt }, ...photos.map((p) => this.inline(p)), { text: "Reference frame of the scene:" }, this.inline(req.referenceFrame)],
-      req.template.aspectRatio,
-    );
-  }
-
   scene(req: ScenePreviewRequest) {
     const parts: GeminiPart[] = [{ text: req.prompt }, { text: "Reference frame:" }, this.inline(req.referenceFrame)];
+    // share the model's reference budget between people, main photo first
+    const perPerson = Math.max(1, Math.floor((this.maxReferences - 1) / Math.max(1, req.people.length)));
     req.people.forEach((p, i) => {
-      parts.push({ text: `Approved look image #${i + 1}:` }, this.inline(p.approved));
-    });
-    // add original photos for likeness while the model's reference budget allows
-    let budget = this.maxReferences - 1 - req.people.length;
-    req.people.forEach((p, i) => {
-      if (p.mainPhoto && budget-- > 0) parts.push({ text: `Original photo of person #${i + 1}:` }, this.inline(p.mainPhoto));
+      p.photos.slice(0, perPerson).forEach((photo, j) => {
+        parts.push({ text: `Person #${i + 1}, photo ${j + 1}:` }, this.inline(photo));
+      });
     });
     return this.call(parts, req.template.aspectRatio);
   }

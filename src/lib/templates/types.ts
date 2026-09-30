@@ -24,6 +24,12 @@ export interface TemplateRole {
   description: string;
   region: Region;
   tone: RoleTone;
+  /**
+   * The person as they appear in the source video — cut out once while the
+   * template is prepared (scripts/make-demo-media.ts), shown on the «replace
+   * this person» step. `atSec` is the moment where this person is clearly visible.
+   */
+  cutout: { src: string; atSec: number };
   /** Server-side prompt fragment (English) describing this role in the scene. */
   promptRole: string;
 }

@@ -21,9 +21,10 @@ import { getConfig } from "../../config";
 import type { Job } from "../../domain/types";
 import { videoProviderFor, VideoProviderError, type VideoProvider, type VideoStatus } from "../../providers/video";
 import { getTemplate } from "../../templates";
-import { assembleWithOriginalAudio, AssemblyCheckError, DurationMismatchError } from "../media";
+import { assembleWithOriginalAudio, AssemblyCheckError, DurationMismatchError, runFfmpeg } from "../media";
 import { getRepo } from "../repo";
 import { getStorage, keys } from "../storage";
+import { isTerminalFailure } from "./jobs";
 
 const MAX_GENERATION_MS = 2 * 60 * 60 * 1000;
 
@@ -39,6 +40,13 @@ function publicUrl(src: string): string | undefined {
 }
 
 export async function step(job: Job, workerId: string): Promise<Job> {
+  const after = await stepInner(job, workerId);
+  // a failure the user cannot retry: the (test) payment goes back
+  if (isTerminalFailure(after)) await getRepo().refundOrderForRef(after.id);
+  return after;
+}
+
+async function stepInner(job: Job, workerId: string): Promise<Job> {
   const repo = getRepo();
   const provider = videoProviderFor(job.provider);
   const save = (patch: Partial<Job>) => repo.updateJob(job.id, patch, workerId);
@@ -93,12 +101,16 @@ async function submit(job: Job, provider: VideoProvider, save: Save): Promise<Jo
 
   let sceneImageUrl: string | undefined;
   let sourceVideoUrl: string | undefined;
-  const referenceImageUrls: string[] = [];
+  let peopleImageUrls: string[][] = job.input.people.map(() => []);
   if (provider.capabilities.needsPublicUrls) {
     const storage = getStorage();
-    sceneImageUrl = (await storage.signedUrl(job.input.sceneImageKey, 3600)) ?? undefined;
+    sceneImageUrl = job.input.sceneImageKey ? ((await storage.signedUrl(job.input.sceneImageKey, 3600)) ?? undefined) : undefined;
     sourceVideoUrl = publicUrl(job.input.sourceVideo.src);
-    if (!sceneImageUrl || !sourceVideoUrl)
+    peopleImageUrls = await Promise.all(
+      job.input.people.map(async (p) => (await Promise.all(p.referenceKeys.map((k) => storage.signedUrl(k, 3600)))).filter((u): u is string => Boolean(u))),
+    );
+    const missing = !sourceVideoUrl || (job.input.mode === "preview" && !sceneImageUrl) || peopleImageUrls.some((u) => u.length === 0);
+    if (missing)
       return save({
         status: "failed",
         error: "Видеосервису нужны публичные ссылки на файлы: подключите Supabase Storage и задайте TEMPLATE_MEDIA_BASE_URL",
@@ -107,13 +119,6 @@ async function submit(job: Job, provider: VideoProvider, save: Save): Promise<Jo
         lockedBy: undefined,
         lockedUntil: undefined,
       });
-    if (provider.capabilities.perPersonReferences)
-      for (const p of job.input.people) {
-        if (p.previewKey) {
-          const u = await storage.signedUrl(p.previewKey, 3600);
-          if (u) referenceImageUrls.push(u);
-        }
-      }
   }
 
   try {
@@ -124,9 +129,10 @@ async function submit(job: Job, provider: VideoProvider, save: Save): Promise<Jo
       negativePrompt: job.input.negativePrompt,
       durationSec: job.input.durationSec,
       aspectRatio: job.input.aspectRatio,
+      mode: job.input.mode,
       sceneImageUrl,
       sourceVideoUrl,
-      referenceImageUrls,
+      peopleImageUrls,
       characterOrientation: t?.provider.klingCharacterOrientation,
       callbackUrl: process.env.VIDEO_WEBHOOK_URL,
       demoFail: job.input.demoFail,
@@ -231,6 +237,10 @@ async function assemble(job: Job, provider: VideoProvider, save: Save, known?: V
     });
     const finalKey = keys.result(job.userId, job.id);
     await storage.put(finalKey, await readFile(outFile), "video/mp4");
+    // a poster frame from the finished video (the player shows it before play)
+    const posterFile = join(dir, "poster.jpg");
+    await runFfmpeg(["-ss", String(Math.min(1, meta.durationSec / 2)), "-i", outFile, "-frames:v", "1", "-q:v", "3", posterFile]);
+    await storage.put(keys.poster(job.userId, job.id), await readFile(posterFile), "image/jpeg");
     await repo.recordResultFile({ userId: job.userId, jobId: job.id, kind: "final", storageKey: finalKey, durationSec: meta.durationSec, hasAudio: meta.hasAudio });
     if (job.actualCost !== undefined) await repo.updateUsage(job.id, { actualCost: job.actualCost });
     return save({

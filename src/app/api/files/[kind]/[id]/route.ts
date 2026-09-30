@@ -3,7 +3,7 @@ import { requireUserId } from "@/lib/server/auth";
 import { handle, type RouteCtx } from "@/lib/server/http";
 import { getRepo } from "@/lib/server/repo";
 import { UserError } from "@/lib/server/services/errors";
-import { getStorage } from "@/lib/server/storage";
+import { getStorage, keys } from "@/lib/server/storage";
 
 /**
  * Private files. The id is looked up WITH the caller's user id, so a file of
@@ -21,6 +21,10 @@ export const GET = handle(async (req: Request, ctx: RouteCtx<{ kind: string; id:
   if (kind === "photo") key = (await repo.getPhoto(userId, id))?.storageKey;
   else if (kind === "preview") key = (await repo.getPreview(userId, id))?.storageKey;
   else if (kind === "jobscene") key = (await repo.getJob(userId, id))?.input.sceneImageKey;
+  else if (kind === "jobposter") {
+    const job = await repo.getJob(userId, id);
+    key = job?.status === "ready" ? keys.poster(userId, id) : undefined;
+  }
   else if (kind === "job") {
     const job = await repo.getJob(userId, id);
     key = job?.status === "ready" ? job.resultKey : undefined;

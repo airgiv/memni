@@ -13,13 +13,15 @@ test("Kling JWT: HS256 with iss/exp/nbf, verifiable with the secret", () => {
   assert.equal(createHmac("sha256", "SK").update(`${h}.${p}`).digest("base64url"), s);
 });
 
-test("only supported inputs are passed; missing required input is reported", () => {
-  const t = getTemplate("hotel-lobby")!;
-  const single = { motionReference: true, imageReference: true, perPersonReferences: false, maxReferenceImages: 1, needsPublicUrls: true, maxDurationSec: 30 };
-  const plan = planVideoInputs(t, single, "Kling");
-  assert.equal(plan.ok, true);
-  assert.ok(plan.notPassed.some((x) => x.includes("отдельные фото")));
-  const noMotion = planVideoInputs(t, { ...single, motionReference: false }, "X");
-  assert.equal(noMotion.ok, false);
-  assert.match(noMotion.problem!, /исходный ролик/);
+test("both video paths are checked against what the provider supports", () => {
+  const t2 = getTemplate("hotel-lobby")!;
+  const t1 = getTemplate("morning-show")!;
+  const kling = { motionReference: true, imageReference: true, perPersonReferences: false, withoutPreview: "single-person" as const, maxReferenceImages: 1, needsPublicUrls: true, maxDurationSec: 30 };
+  assert.equal(planVideoInputs(t2, kling, "preview").ok, true);
+  const direct2 = planVideoInputs(t2, kling, "direct");
+  assert.equal(direct2.ok, false, "one character image cannot carry two people without a prepared picture");
+  assert.match(direct2.problem!, /без превью/);
+  assert.equal(planVideoInputs(t1, kling, "direct").ok, true, "one-person meme: the photo is the character image");
+  assert.equal(planVideoInputs(t2, { ...kling, withoutPreview: "any" }, "direct").ok, true);
+  assert.equal(planVideoInputs(t2, { ...kling, motionReference: false }, "preview").ok, false);
 });

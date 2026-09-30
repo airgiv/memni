@@ -54,7 +54,8 @@ export function TelegramBridge({ onLogin }: { onLogin: () => void }) {
     const root = document.documentElement;
     root.dataset.telegram = "1";
     const apply = () => {
-      root.dataset.rapTheme = tg.colorScheme === "dark" ? "dark" : "light";
+      // the app is dark only; Telegram's header/background follow it
+      root.dataset.rapTheme = "dark";
       const s = tg.safeAreaInset;
       const c = tg.contentSafeAreaInset;
       root.style.setProperty("--tg-safe-top", `${(s?.top ?? 0) + (c?.top ?? 0)}px`);

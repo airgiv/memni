@@ -6,6 +6,9 @@ import { randomUUID } from "node:crypto";
 import sharp, { type Metadata, type OverlayOptions } from "sharp";
 import { getConfig } from "../../config";
 import type { Person, Photo } from "../../domain/types";
+import { assignPerson } from "../../domain/draft";
+import { ConflictError } from "../repo";
+import { loadDraft } from "./drafts";
 import { sanitizeNote } from "../../domain/prompts";
 import { getRepo } from "../repo";
 import { getStorage, keys } from "../storage";
@@ -54,65 +57,99 @@ export async function updatePerson(
   return repo.savePerson(next);
 }
 
-export async function addPhoto(userId: string, personId: string, file: { bytes: Buffer; type: string; name?: string }): Promise<PhotoCheck> {
+/** Validate and normalise an upload. Throws a user-readable error; stores nothing. */
+async function normalizePhoto(file: { bytes: Buffer }) {
   const c = getConfig();
-  const repo = getRepo();
-  const person = await repo.getPerson(userId, personId);
-  if (!person) throw new UserError("not_found", "Человек не найден", 404);
-  const existing = await repo.listPhotos(userId, [personId]);
-  if (existing.length >= MAX_PHOTOS_PER_PERSON)
-    throw new UserError("too_many", `Хватит ${MAX_PHOTOS_PER_PERSON} фото — удалите лишнее, чтобы добавить новое`);
   if (file.bytes.length > c.limits.maxPhotoBytes)
-    throw new UserError("too_big", `Файл больше ${Math.round(c.limits.maxPhotoBytes / 1024 / 1024)} МБ — выберите фото поменьше`);
-
+    throw new UserError("too_big", `Файл больше ${Math.round(c.limits.maxPhotoBytes / 1024 / 1024)} МБ`);
   let meta: Metadata;
   try {
     meta = await sharp(file.bytes).metadata();
   } catch {
-    throw new UserError("bad_format", "Не получилось открыть файл. Подойдут фото JPEG, PNG или WebP");
+    throw new UserError("bad_format", "Это не фото. Подойдут JPEG, PNG или WebP");
   }
-  if (!meta.format || !FORMATS[meta.format]) {
-    const heic = meta.format === "heif";
-    throw new UserError(
-      "bad_format",
-      heic
-        ? "Формат HEIC пока не поддерживается. На iPhone: Настройки → Камера → Форматы → «Наиболее совместимый», или отправьте фото как JPEG"
-        : "Подойдут фото JPEG, PNG или WebP",
-    );
-  }
+  if (!meta.format || !FORMATS[meta.format])
+    throw new UserError("bad_format", meta.format === "heif" ? "HEIC пока не поддерживается — отправьте фото как JPEG" : "Подойдут JPEG, PNG или WebP");
   // EXIF orientation applied before measuring
   const rotated = meta.orientation && meta.orientation >= 5;
   const width = (rotated ? meta.height : meta.width) ?? 0;
   const height = (rotated ? meta.width : meta.height) ?? 0;
-  if (Math.min(width, height) < MIN_SIDE)
-    throw new UserError("too_small", `Фото слишком маленькое (${width}×${height}). Нужно не меньше ${MIN_SIDE} px по короткой стороне`);
-
+  if (Math.min(width, height) < MIN_SIDE) throw new UserError("too_small", `Фото слишком маленькое — нужно от ${MIN_SIDE} px`);
   const notes: string[] = [];
-  if (Math.min(width, height) < GOOD_SIDE) notes.push("Фото небольшое — лицо может получиться менее чётким");
-
+  if (Math.min(width, height) < GOOD_SIDE) notes.push("Фото небольшое — лицо может выйти менее чётким");
   // re-encode: applies rotation and drops EXIF (GPS, device) before storage
   const normalized = await sharp(file.bytes)
     .rotate()
     .resize(MAX_STORED_SIDE, MAX_STORED_SIDE, { fit: "inside", withoutEnlargement: true })
     .jpeg({ quality: 90 })
     .toBuffer({ resolveWithObject: true });
+  return { normalized, notes };
+}
 
+async function storePhoto(userId: string, person: Person, n: Awaited<ReturnType<typeof normalizePhoto>>): Promise<PhotoCheck> {
+  const repo = getRepo();
   const id = randomUUID();
   const storageKey = keys.photo(userId, id, "jpg");
-  await getStorage().put(storageKey, normalized.data, "image/jpeg");
+  await getStorage().put(storageKey, n.normalized.data, "image/jpeg");
   const photo = await repo.savePhoto({
     id,
     userId,
-    personId,
+    personId: person.id,
     storageKey,
     mime: "image/jpeg",
-    width: normalized.info.width,
-    height: normalized.info.height,
-    bytes: normalized.data.length,
+    width: n.normalized.info.width,
+    height: n.normalized.info.height,
+    bytes: n.normalized.data.length,
     createdAt: new Date().toISOString(),
   });
   if (!person.mainPhotoId) await repo.savePerson({ ...person, mainPhotoId: id, updatedAt: new Date().toISOString() });
-  return { photo, notes };
+  return { photo, notes: n.notes };
+}
+
+export async function addPhoto(userId: string, personId: string, file: { bytes: Buffer; type: string; name?: string }): Promise<PhotoCheck> {
+  const repo = getRepo();
+  const person = await repo.getPerson(userId, personId);
+  if (!person) throw new UserError("not_found", "Человек не найден", 404);
+  const existing = await repo.listPhotos(userId, [personId]);
+  if (existing.length >= MAX_PHOTOS_PER_PERSON) throw new UserError("too_many", `Не больше ${MAX_PHOTOS_PER_PERSON} фото — удалите лишнее`);
+  return storePhoto(userId, person, await normalizePhoto(file));
+}
+
+/**
+ * Upload straight into a role. The first photo creates the person — saved to
+ * the library by default, or kept only for this order when `save` is false —
+ * and casts them. One person per role, never a duplicate per order.
+ */
+export async function addPhotoToRole(
+  userId: string,
+  draftId: string,
+  roleId: string,
+  file: { bytes: Buffer; type: string; name?: string },
+  save: boolean,
+): Promise<PhotoCheck & { personId: string }> {
+  const repo = getRepo();
+  const n = await normalizePhoto(file); // validate before creating anything
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const { t, draft } = await loadDraft(userId, draftId);
+    if (!t.roles.some((r) => r.id === roleId)) throw new UserError("bad_role", "Такой роли нет", 400);
+    const current = draft.assignments[roleId];
+    if (current) {
+      const res = await addPhoto(userId, current.personId, file);
+      return { ...res, personId: current.personId };
+    }
+    const count = (await repo.listPeople(userId)).length;
+    const person = await createPerson(userId, `Человек ${count + 1}`, save);
+    try {
+      await repo.updateDraft({ ...assignPerson(t, draft, roleId, person.id), version: draft.version + 1, updatedAt: new Date().toISOString() }, draft.version);
+    } catch (e) {
+      await repo.deletePerson(userId, person.id);
+      if (e instanceof ConflictError) continue;
+      throw e;
+    }
+    const res = await storePhoto(userId, person, n);
+    return { ...res, personId: person.id };
+  }
+  throw new ConflictError();
 }
 
 export async function removePhoto(userId: string, photoId: string) {

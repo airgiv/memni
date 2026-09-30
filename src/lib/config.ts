@@ -93,8 +93,8 @@ export function getConfig() {
     },
 
     limits: {
-      /** free preview images per user (person + scene previews, demo and real alike) */
-      freePreviewsPerUser: int("FREE_PREVIEWS_PER_USER", 8),
+      /** scene previews a user gets free (the "first preview free" offer); later ones are paid */
+      freePreviewsPerUser: int("FREE_PREVIEWS_PER_USER", 1),
       /** video jobs one user may have in flight */
       maxActiveJobsPerUser: int("MAX_ACTIVE_JOBS_PER_USER", 1),
       /** video jobs in flight across the whole service */
@@ -118,6 +118,16 @@ export function getConfig() {
       /** payments are never charged in this version; only test orders are created */
       live: false,
     },
+
+    pricing: {
+      currency: str("PRICE_CURRENCY") ?? "RUB",
+      /** price of every preview after the free ones, minor units (4900 = 49 ₽) */
+      previewMinor: int("PREVIEW_PRICE_MINOR", 4900),
+      /** overrides the template's own video price when set */
+      videoMinor: str("VIDEO_PRICE_MINOR") ? int("VIDEO_PRICE_MINOR", 0) : undefined,
+      /** prices are placeholders until cost and seller country are known */
+      areExamples: str("PRICES_ARE_EXAMPLES") !== "false",
+    },
   };
 }
 
@@ -131,7 +141,6 @@ export function publicConfig() {
     imageMode: c.imageMode,
     videoMode: c.videoMode,
     isDemo: c.isDemo,
-    freePreviewsPerUser: c.limits.freePreviewsPerUser,
     telegramConfigured: Boolean(c.telegram.botToken),
     paymentsLive: c.payments.live,
   };

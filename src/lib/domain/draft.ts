@@ -1,12 +1,11 @@
 /**
- * Pure draft logic: who is in which role, what their look is, which previews
- * are still valid. No I/O here, so it is easy to test and reuse in the worker.
+ * Pure draft logic: who is in which role and how they look. No I/O here.
  *
- * The central idea: every preview stores the fingerprint of the inputs it was
- * made from. A confirmation counts only while that fingerprint still equals
- * the fingerprint of the current inputs. Any change to photos, roles or
- * appearance-affecting settings therefore removes the confirmation, while the
- * old preview stays in history (and becomes valid again if the inputs return).
+ * Each scene preview stores the fingerprint of the draft inputs it was made
+ * from (people, their photos, looks, template and prompt version). A preview
+ * is "actual" only while that fingerprint equals the current one. Changing a
+ * photo or a look therefore makes old previews non-actual — they stay in the
+ * history and become actual again if the inputs return to that state.
  */
 import type { TemplateDef } from "../templates/types";
 import type { Assignment, Draft, LookSettings, Person, Photo, Preview } from "./types";
@@ -22,7 +21,7 @@ export class DraftError extends Error {
 }
 
 export function defaultLook(t: TemplateDef): LookSettings {
-  return { clothing: t.look.defaultClothing, glasses: t.look.glassesOption ? "as-photo" : undefined };
+  return { clothing: t.look.defaultClothing, presetId: t.look.defaultClothing === "preset" ? t.look.presets[0]?.id : undefined };
 }
 
 export function normalizeLook(t: TemplateDef, look: Partial<LookSettings> | undefined): LookSettings {
@@ -31,7 +30,7 @@ export function normalizeLook(t: TemplateDef, look: Partial<LookSettings> | unde
   let presetId: string | undefined;
   if (clothing === "preset") {
     presetId = t.look.presets.find((p) => p.id === look?.presetId)?.id ?? t.look.presets[0]?.id;
-    if (!presetId) throw new DraftError("bad_look", "У шаблона нет готовых вариантов одежды");
+    if (!presetId) throw new DraftError("bad_look", "У этого мема нет других образов");
   }
   const glasses = t.look.glassesOption ? (look?.glasses === "remove" ? "remove" : "as-photo") : undefined;
   return { clothing, presetId, glasses };
@@ -45,7 +44,6 @@ export interface PersonInputs {
 /** Everything that changes how one person looks in one role. */
 export function personFingerprint(t: TemplateDef, roleId: string, a: Assignment, p: PersonInputs): string {
   return fingerprint({
-    kind: "person",
     template: t.id,
     templateVersion: t.version,
     prompt: t.pipeline.promptVersion,
@@ -58,18 +56,14 @@ export function personFingerprint(t: TemplateDef, roleId: string, a: Assignment,
   });
 }
 
-export function sceneFingerprint(t: TemplateDef, draft: Draft, roleFps: Record<string, string | null>): string {
+/** Everything the scene preview and the video depend on. */
+export function inputsFingerprint(t: TemplateDef, draft: Draft, roleFps: Record<string, string | null>): string {
   return fingerprint({
-    kind: "scene",
     template: t.id,
     templateVersion: t.version,
     prompt: t.pipeline.promptVersion,
     option: draft.scene.optionId,
-    roles: t.roles.map((r) => ({
-      roleId: r.id,
-      fp: roleFps[r.id] ?? null,
-      confirmed: draft.assignments[r.id]?.confirmedPreviewId ?? null,
-    })),
+    roles: t.roles.map((r) => ({ roleId: r.id, fp: roleFps[r.id] ?? null })),
   });
 }
 
@@ -93,10 +87,8 @@ export function swapRoles(t: TemplateDef, draft: Draft, roleA: string, roleB: st
     if (!t.roles.some((x) => x.id === r)) throw new DraftError("bad_role", "Такой роли нет в шаблоне");
   const next = structuredClone(draft);
   const a = next.assignments[roleA];
-  const b = next.assignments[roleB];
-  // The look travels with the person; role-specific previews/confirmations do not.
-  next.assignments[roleA] = b ? { personId: b.personId, look: b.look } : undefined;
-  next.assignments[roleB] = a ? { personId: a.personId, look: a.look } : undefined;
+  next.assignments[roleA] = next.assignments[roleB];
+  next.assignments[roleB] = a;
   return next;
 }
 
@@ -109,15 +101,8 @@ export function clearRole(draft: Draft, roleId: string): Draft {
 export function setLook(t: TemplateDef, draft: Draft, roleId: string, look: Partial<LookSettings>): Draft {
   const next = structuredClone(draft);
   const a = next.assignments[roleId];
-  if (!a) throw new DraftError("no_person", "Сначала выберите человека для этой роли");
-  a.look = normalizeLook(t, { ...a.look, ...look });
-  return next;
-}
-
-export function setScene(t: TemplateDef, draft: Draft, optionId: string): Draft {
-  if (!t.scene.options.some((o) => o.id === optionId)) throw new DraftError("bad_scene", "Такой настройки сцены нет");
-  const next = structuredClone(draft);
-  next.scene = { optionId };
+  if (!a) throw new DraftError("no_person", "Сначала добавьте фото");
+  a.look = normalizeLook(t, look);
   return next;
 }
 
@@ -131,64 +116,38 @@ export interface ReconcileContext {
 export interface ReconcileResult {
   draft: Draft;
   roleFingerprints: Record<string, string | null>;
-  sceneFingerprint: string;
-  /** confirmations removed by this pass — the UI explains why */
-  cleared: { roleId?: string; scene?: boolean }[];
+  inputsFingerprint: string;
+  /** roles freed because their person was deleted */
+  cleared: string[];
 }
 
-/**
- * Drops confirmations whose preview no longer matches the inputs, and
- * selections that point at previews of someone else. Idempotent.
- */
+/** Frees roles of deleted people and drops a selection that no longer exists. Idempotent. */
 export function reconcile(t: TemplateDef, draft: Draft, ctx: ReconcileContext): ReconcileResult {
   const next = structuredClone(draft);
-  const cleared: ReconcileResult["cleared"] = [];
+  const cleared: string[] = [];
   const roleFps: Record<string, string | null> = {};
-
   for (const role of t.roles) {
     const a = next.assignments[role.id];
-    if (!a) {
-      roleFps[role.id] = null;
-      continue;
-    }
-    const p = ctx.people.get(a.personId);
-    if (!p) {
-      // person deleted
+    const p = a ? ctx.people.get(a.personId) : undefined;
+    if (a && !p) {
       next.assignments[role.id] = undefined;
-      roleFps[role.id] = null;
-      cleared.push({ roleId: role.id });
-      continue;
+      cleared.push(role.id);
     }
-    const fp = personFingerprint(t, role.id, a, p);
-    roleFps[role.id] = fp;
-    if (a.selectedPreviewId) {
-      const sel = ctx.previews.get(a.selectedPreviewId);
-      if (!sel || sel.roleId !== role.id || sel.personId !== a.personId) a.selectedPreviewId = undefined;
-    }
-    if (a.confirmedPreviewId) {
-      const conf = ctx.previews.get(a.confirmedPreviewId);
-      if (!conf || conf.status !== "ready" || conf.fingerprint !== fp) {
-        a.confirmedPreviewId = undefined;
-        cleared.push({ roleId: role.id });
-      }
-    }
+    roleFps[role.id] = a && p ? personFingerprint(t, role.id, a, p) : null;
   }
+  if (next.sceneSelectedPreviewId && !ctx.previews.has(next.sceneSelectedPreviewId)) next.sceneSelectedPreviewId = undefined;
+  return { draft: next, roleFingerprints: roleFps, inputsFingerprint: inputsFingerprint(t, next, roleFps), cleared };
+}
 
-  const sceneFp = sceneFingerprint(t, next, roleFps);
-  const allConfirmed = t.roles.every((r) => next.assignments[r.id]?.confirmedPreviewId);
-  if (next.sceneConfirmedPreviewId) {
-    const conf = ctx.previews.get(next.sceneConfirmedPreviewId);
-    if (!allConfirmed || !conf || conf.status !== "ready" || conf.fingerprint !== sceneFp) {
-      next.sceneConfirmedPreviewId = undefined;
-      cleared.push({ scene: true });
-    }
-  }
-  return { draft: next, roleFingerprints: roleFps, sceneFingerprint: sceneFp, cleared };
+/** Every role has a person with at least the minimum number of photos. */
+export function rolesReady(t: TemplateDef, draft: Draft, people: Map<string, PersonInputs>): boolean {
+  return t.roles.every((r) => {
+    const a = draft.assignments[r.id];
+    const p = a ? people.get(a.personId) : undefined;
+    return Boolean(p && p.photos.length >= t.photoRequirements.minPhotos);
+  });
 }
 
 export function sameDraftState(a: Draft, b: Draft): boolean {
-  return (
-    fingerprint({ as: a.assignments, s: a.scene, ss: a.sceneSelectedPreviewId, sc: a.sceneConfirmedPreviewId }) ===
-    fingerprint({ as: b.assignments, s: b.scene, ss: b.sceneSelectedPreviewId, sc: b.sceneConfirmedPreviewId })
-  );
+  return fingerprint({ as: a.assignments, s: a.scene, ss: a.sceneSelectedPreviewId }) === fingerprint({ as: b.assignments, s: b.scene, ss: b.sceneSelectedPreviewId });
 }

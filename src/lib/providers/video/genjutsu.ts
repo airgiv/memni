@@ -39,6 +39,7 @@ export class GenjutsuVideoProvider implements VideoProvider {
     motionReference: true,
     imageReference: true,
     perPersonReferences: true,
+    withoutPreview: "any" as const,
     maxReferenceImages: 8,
     needsPublicUrls: true,
     maxDurationSec: 30,
@@ -65,8 +66,11 @@ export class GenjutsuVideoProvider implements VideoProvider {
   }
 
   async submit(req: VideoSubmitRequest) {
-    if (!req.sourceVideoUrl || !req.sceneImageUrl) throw new VideoProviderError("unsupported", "Нужны публичные ссылки");
-    const images = [req.sceneImageUrl, ...req.referenceImageUrls].slice(0, this.capabilities.maxReferenceImages);
+    if (!req.sourceVideoUrl) throw new VideoProviderError("unsupported", "Нужны публичные ссылки");
+    // scene image first (preview mode), then each person's photos, within the 8-image limit
+    const people = req.peopleImageUrls.flatMap((urls) => urls.slice(0, req.mode === "preview" ? 1 : 3));
+    const images = [...(req.sceneImageUrl ? [req.sceneImageUrl] : []), ...people].slice(0, this.capabilities.maxReferenceImages);
+    if (images.length === 0) throw new VideoProviderError("unsupported", "Нет изображений для видео");
     const hook = req.callbackUrl ? `?hf_webhook=${encodeURIComponent(req.callbackUrl)}` : "";
     const json = await this.request("POST", `${this.cfg.baseUrl ?? BASE}/higgsfield/genjutsu/motion-transfer/v1.0${hook}`, {
       video_url: req.sourceVideoUrl,

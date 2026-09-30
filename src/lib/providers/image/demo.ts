@@ -1,16 +1,15 @@
 /**
- * Demo image adapter. It does NOT generate anything: it frames the user's own
- * photo (person step) or pins photos onto the template frame (scene step) and
- * stamps «ДЕМО · не генерация» on the result, so nobody can mistake it for a
- * personal AI image. It exists to exercise the whole flow — history, stale
- * answers, confirmations, limits, errors — without paid calls.
+ * Demo image adapter. It does NOT generate anything: it pins each person's
+ * main photo onto the template frame and stamps «ДЕМО · не генерация» on the
+ * result, so nobody can mistake it for a personal AI image. It exists to
+ * exercise the whole flow — history, stale previews, prices, errors — without
+ * paid calls.
  */
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import sharp, { type Metadata, type OverlayOptions } from "sharp";
-import { ImageProviderError, type ImageProvider, type ImageResult, type PersonPreviewRequest, type ScenePreviewRequest } from "./types";
+import { ImageProviderError, type ImageProvider, type ImageResult, type ScenePreviewRequest } from "./types";
 
-const TONES = ["#ff5b1a", "#0582ff", "#8e0d99", "#14a85c", "#f5a524", "#ff9be0"];
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 function size(aspect: string, long = 1024): { w: number; h: number } {
@@ -29,28 +28,6 @@ export class DemoImageProvider implements ImageProvider {
 
   constructor(private delayMs = 1600) {}
 
-  async person(req: PersonPreviewRequest): Promise<ImageResult> {
-    await sleep(this.delayMs + Math.random() * 800);
-    if (req.demo?.fail) throw new ImageProviderError("demo_failure", "Демо: имитация ошибки генерации");
-    const { w, h } = size(req.template.aspectRatio);
-    const tone = TONES[(req.variant - 1) % TONES.length];
-    const photo = req.photos[0];
-    const inner = await sharp(photo.bytes)
-      .rotate()
-      .resize(w - 48, h - 48, { fit: "cover", position: "attention" })
-      .modulate({ saturation: 0.35 })
-      .toBuffer();
-    const bytes = await sharp({ create: { width: w, height: h, channels: 3, background: tone } })
-      .composite([
-        { input: inner, left: 24, top: 24 },
-        { input: await badge("badge-demo.png"), left: 40, top: 40 },
-        { input: await badge("badge-person.png"), left: 40, top: 96 },
-      ])
-      .jpeg({ quality: 84 })
-      .toBuffer();
-    return { bytes, mime: "image/jpeg", estimatedCostUsd: 0 };
-  }
-
   async scene(req: ScenePreviewRequest): Promise<ImageResult> {
     await sleep(this.delayMs + Math.random() * 1200);
     if (req.demo?.fail) throw new ImageProviderError("demo_failure", "Демо: имитация ошибки генерации");
@@ -63,7 +40,8 @@ export class DemoImageProvider implements ImageProvider {
       const ring = Buffer.from(
         `<svg width="${side}" height="${side}"><circle cx="${side / 2}" cy="${side / 2}" r="${side / 2 - 5}" fill="none" stroke="#fff" stroke-width="10"/></svg>`,
       );
-      const face = await sharp(p.approved.bytes)
+      const face = await sharp(p.photos[0].bytes)
+        .rotate()
         .resize(side, side, { fit: "cover", position: "attention" })
         .composite([{ input: circle, blend: "dest-in" }, { input: ring }])
         .png()

@@ -1,5 +1,6 @@
 import Link from "next/link";
-import { Button, EmptyState, FancyIcon } from "@/ui/rapui";
+import { EmptyState, FancyIcon } from "@/ui/rapui";
+import { Button } from "@/ui/Button";
 
 export default function NotFound() {
   return (

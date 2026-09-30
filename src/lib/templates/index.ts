@@ -40,6 +40,7 @@ const hotelLobby: TemplateDef = {
       description: "Начинает куплет, стоит вполоборота к центру.",
       region: { x: 0.05, y: 0.36, w: 0.42, h: 0.58 },
       tone: "flame",
+      cutout: { src: "/templates/hotel-lobby/roles/mic-left.jpg", atSec: 2.0 },
       promptRole: "the performer standing on the LEFT side at the left microphone stand, turned slightly toward the centre",
     },
     {
@@ -49,6 +50,7 @@ const hotelLobby: TemplateDef = {
       description: "Подхватывает припев, стоит ближе к стойке ресепшена.",
       region: { x: 0.53, y: 0.36, w: 0.42, h: 0.58 },
       tone: "blue",
+      cutout: { src: "/templates/hotel-lobby/roles/mic-right.jpg", atSec: 2.0 },
       promptRole: "the performer standing on the RIGHT side at the right microphone stand, near the reception desk",
     },
   ],
@@ -66,27 +68,27 @@ const hotelLobby: TemplateDef = {
     ],
   },
   look: {
-    clothingModes: ["photo", "template", "preset"],
-    defaultClothing: "photo",
+    clothingModes: ["template", "photo", "preset"],
+    defaultClothing: "template",
     templateOutfit: {
-      label: "Как в клипе: спортивный костюм и цепь",
+      label: "Одежда из ролика",
       prompt: "an oversized tracksuit with a chunky chain, as in the original scene",
     },
     presets: [
       {
         id: "suit",
-        label: "Костюм для лобби",
+        label: "Костюм",
         description: "Тёмный костюм, светлая рубашка",
         prompt: "a dark tailored suit with a light shirt, no tie",
       },
       {
         id: "robe",
-        label: "Гостиничный халат",
+        label: "Халат",
         description: "Белый махровый халат и тапочки",
         prompt: "a white terry hotel bathrobe",
       },
     ],
-    glassesOption: true,
+    glassesOption: false,
     appearanceNoteMaxLength: 160,
   },
   scene: {
@@ -108,7 +110,7 @@ const hotelLobby: TemplateDef = {
     defaultOption: "faithful",
   },
   pipeline: {
-    promptVersion: "hotel-lobby/2026-09-a",
+    promptVersion: "hotel-lobby/2026-09-b",
     video: { needsMotionReference: true, needsImageReference: true, wantsPerPersonReferences: true },
   },
   provider: { klingCharacterOrientation: "video", maxVideoDurationSec: 10 },
@@ -139,6 +141,7 @@ const morningShow: TemplateDef = {
       description: "Сидит за столом в центре студии.",
       region: { x: 0.26, y: 0.34, w: 0.48, h: 0.5 },
       tone: "plum",
+      cutout: { src: "/templates/morning-show/roles/host.jpg", atSec: 1.0 },
       promptRole: "the news host sitting at the desk in the centre",
     },
   ],
@@ -151,9 +154,9 @@ const morningShow: TemplateDef = {
     tips: ["Лицо анфас, взгляд в камеру", "Достаточно портрета по плечи"],
   },
   look: {
-    clothingModes: ["photo", "template"],
+    clothingModes: ["template", "photo"],
     defaultClothing: "template",
-    templateOutfit: { label: "Пиджак ведущего", prompt: "a neat blazer of a TV host" },
+    templateOutfit: { label: "Одежда из ролика", prompt: "a neat blazer of a TV host" },
     presets: [],
     glassesOption: false,
     appearanceNoteMaxLength: 160,
@@ -170,7 +173,7 @@ const morningShow: TemplateDef = {
     defaultOption: "faithful",
   },
   pipeline: {
-    promptVersion: "generic/2026-09-a",
+    promptVersion: "generic/2026-09-b",
     video: { needsMotionReference: true, needsImageReference: true, wantsPerPersonReferences: true },
   },
   provider: { klingCharacterOrientation: "video", maxVideoDurationSec: 10 },
@@ -201,6 +204,7 @@ const trio: TemplateDef = {
       description: "Оборачивается последним.",
       region: { x: 0.56, y: 0.14, w: 0.3, h: 0.34 },
       tone: "acid",
+      cutout: { src: "/templates/stairs-trio/roles/top.jpg", atSec: 1.5 },
       promptRole: "the person on the top step, right side",
     },
     {
@@ -210,6 +214,7 @@ const trio: TemplateDef = {
       description: "Оборачивается вторым.",
       region: { x: 0.35, y: 0.33, w: 0.3, h: 0.34 },
       tone: "bubble",
+      cutout: { src: "/templates/stairs-trio/roles/middle.jpg", atSec: 1.5 },
       promptRole: "the person in the middle of the staircase",
     },
     {
@@ -219,6 +224,7 @@ const trio: TemplateDef = {
       description: "Оборачивается первым, ближе всех к камере.",
       region: { x: 0.12, y: 0.52, w: 0.32, h: 0.4 },
       tone: "sky",
+      cutout: { src: "/templates/stairs-trio/roles/bottom.jpg", atSec: 1.5 },
       promptRole: "the person at the bottom of the staircase, closest to the camera, left side",
     },
   ],
@@ -231,11 +237,11 @@ const trio: TemplateDef = {
     tips: ["Фото в полный рост помогает с позой", "Лицо должно быть хорошо видно"],
   },
   look: {
-    clothingModes: ["photo", "template"],
-    defaultClothing: "photo",
-    templateOutfit: { label: "Вечерний наряд", prompt: "elegant evening wear" },
+    clothingModes: ["template", "photo"],
+    defaultClothing: "template",
+    templateOutfit: { label: "Одежда из ролика", prompt: "elegant evening wear" },
     presets: [],
-    glassesOption: true,
+    glassesOption: false,
     appearanceNoteMaxLength: 160,
   },
   scene: {
@@ -250,7 +256,7 @@ const trio: TemplateDef = {
     defaultOption: "faithful",
   },
   pipeline: {
-    promptVersion: "generic/2026-09-a",
+    promptVersion: "generic/2026-09-b",
     video: { needsMotionReference: true, needsImageReference: true, wantsPerPersonReferences: true },
   },
   provider: { klingCharacterOrientation: "video", maxVideoDurationSec: 10 },

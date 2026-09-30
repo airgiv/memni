@@ -15,8 +15,9 @@
  *           data.task_status: submitted | processing | succeed | failed
  *           data.task_result.videos[0].url
  *
- * Motion Control takes ONE character image, so only the approved scene still
- * is passed; separate per-person references are NOT sent (the UI says so).
+ * Motion Control takes ONE character image: in "preview" mode it is the chosen
+ * scene image; in "direct" mode it can only be the person's photo, so direct
+ * mode works for one-person memes only (planVideoInputs reports this).
  * Whether it reliably drives two people from one reference clip must be
  * tested on real material before launch.
  */
@@ -51,6 +52,9 @@ export class KlingVideoProvider implements VideoProvider {
     motionReference: true,
     imageReference: true,
     perPersonReferences: false,
+    // Motion Control takes exactly one character image: without a prepared scene
+    // image that can only be the person's own photo, i.e. a one-person meme
+    withoutPreview: "single-person" as const,
     maxReferenceImages: 1,
     needsPublicUrls: true,
     // per docs excerpt: character_orientation "image" → reference ≤ 10 s, "video" → ≤ 30 s (we send "video")
@@ -88,11 +92,14 @@ export class KlingVideoProvider implements VideoProvider {
   }
 
   async submit(req: VideoSubmitRequest) {
-    if (!req.sceneImageUrl || !req.sourceVideoUrl)
+    const image = req.mode === "preview" ? req.sceneImageUrl : req.peopleImageUrls.length === 1 ? req.peopleImageUrls[0][0] : undefined;
+    if (req.mode === "direct" && req.peopleImageUrls.length !== 1)
+      throw new VideoProviderError("unsupported", "Без превью Kling работает только с мемами на одного человека");
+    if (!image || !req.sourceVideoUrl)
       throw new VideoProviderError("unsupported", "Kling нужны публичные ссылки на изображение и исходный ролик");
     const data = await this.request<KlingTask>("POST", "/v1/videos/motion-control", {
       model_name: this.cfg.model,
-      image_url: req.sceneImageUrl,
+      image_url: image,
       video_url: req.sourceVideoUrl,
       character_orientation: req.characterOrientation ?? "video",
       mode: this.cfg.mode,

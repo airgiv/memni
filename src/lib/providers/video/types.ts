@@ -10,6 +10,13 @@ export interface VideoCapabilities {
   /** separate reference images per person, in addition to the scene image */
   perPersonReferences: boolean;
   maxReferenceImages: number;
+  /**
+   * Can it work WITHOUT a prepared scene image, from people's photos only?
+   *  "any"           — yes, with several reference images;
+   *  "single-person" — only for a one-person meme (the photo is the character image);
+   *  "none"          — no.
+   */
+  withoutPreview: "any" | "single-person" | "none";
   /** inputs must be public HTTPS URLs (not bytes) */
   needsPublicUrls: boolean;
   maxDurationSec: number;
@@ -23,9 +30,12 @@ export interface VideoSubmitRequest {
   negativePrompt?: string;
   durationSec: number;
   aspectRatio: string;
+  mode: "preview" | "direct";
+  /** only in "preview" mode */
   sceneImageUrl?: string;
   sourceVideoUrl?: string;
-  referenceImageUrls: string[];
+  /** per role, in template order: that person's photos (main first) */
+  peopleImageUrls: string[][];
   callbackUrl?: string;
   characterOrientation?: "image" | "video";
   /** demo only: which stage to fail at */
@@ -66,32 +76,20 @@ export interface VideoProvider {
 
 export interface InputPlan {
   ok: boolean;
-  used: string[];
-  notPassed: string[];
+  /** short user-facing reason when not ok */
   problem?: string;
 }
 
-/** Decide which of the scenario's inputs this provider can actually receive. */
-export function planVideoInputs(t: TemplateDef, caps: VideoCapabilities, providerName: string): InputPlan {
-  const used: string[] = [];
-  const notPassed: string[] = [];
-  const need = t.pipeline.video;
-  if (need.needsMotionReference) {
-    if (!caps.motionReference)
-      return { ok: false, used, notPassed, problem: `${providerName} не принимает исходный ролик для движений — сценарий этого шаблона недоступен` };
-    used.push("исходный ролик шаблона (движения и тайминг)");
-  }
-  if (need.needsImageReference) {
-    if (!caps.imageReference)
-      return { ok: false, used, notPassed, problem: `${providerName} не принимает утверждённое изображение — сценарий недоступен` };
-    used.push("утверждённое фото сцены (внешность и композиция)");
-  }
-  if (need.wantsPerPersonReferences) {
-    if (caps.perPersonReferences) used.push("отдельные фото участников (сходство)");
-    else notPassed.push("отдельные фото участников — модель принимает только одно изображение");
-  }
-  used.push("инструкции о ролях, собранные сервером");
-  if (t.durationSec > caps.maxDurationSec)
-    return { ok: false, used, notPassed, problem: `Ролик длиннее, чем поддерживает ${providerName} (${caps.maxDurationSec} с)` };
-  return { ok: true, used, notPassed };
+/**
+ * Can this provider run the template's scenario in this mode? Only supported
+ * combinations are ever sent; an unsupported path is reported, not faked.
+ */
+export function planVideoInputs(t: TemplateDef, caps: VideoCapabilities, mode: "preview" | "direct"): InputPlan {
+  if (t.pipeline.video.needsMotionReference && !caps.motionReference)
+    return { ok: false, problem: "Видео для этого мема пока недоступно" };
+  if (t.durationSec > caps.maxDurationSec) return { ok: false, problem: "Этот мем слишком длинный для видеосервиса" };
+  if (mode === "preview") return caps.imageReference ? { ok: true } : { ok: false, problem: "Видео по превью пока недоступно" };
+  if (caps.withoutPreview === "any") return { ok: true };
+  if (caps.withoutPreview === "single-person" && t.roles.length === 1) return { ok: true };
+  return { ok: false, problem: "Для этого мема видео без превью пока недоступно" };
 }

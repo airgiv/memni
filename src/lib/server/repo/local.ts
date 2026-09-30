@@ -35,7 +35,9 @@ export class LocalRepo implements Repo {
         status TEXT NOT NULL, provider TEXT, provider_task_id TEXT, locked_until TEXT, next_poll_at TEXT,
         created_at TEXT NOT NULL, data TEXT NOT NULL, UNIQUE (user_id, idem_key));
       CREATE TABLE IF NOT EXISTS usage (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, kind TEXT NOT NULL, ref_id TEXT, refunded INTEGER NOT NULL DEFAULT 0, data TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS orders (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, job_id TEXT NOT NULL, data TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS purchases (
+        id TEXT PRIMARY KEY, user_id TEXT NOT NULL, ref_id TEXT NOT NULL, idem_key TEXT NOT NULL,
+        status TEXT NOT NULL, data TEXT NOT NULL, UNIQUE (user_id, idem_key));
     `);
   }
 
@@ -174,13 +176,17 @@ export class LocalRepo implements Repo {
   async getPreview(userId: string, id: string) {
     return this.one<Preview>("SELECT data FROM previews WHERE id = ? AND user_id = ?", id, userId);
   }
-  async reservePreview(p: Preview, usage: UsageEvent, limit: number) {
+  async reservePreview(p: Preview, usage: UsageEvent, opts: { freeLimit?: number; order?: Order }) {
     return this.tx(() => {
-      const used = this.db
-        .prepare("SELECT COUNT(*) AS n FROM usage WHERE user_id = ? AND kind = 'preview_image' AND refunded = 0")
-        .get(p.userId) as { n: number };
-      if (Number(used.n) >= limit)
-        throw new LimitError("preview_limit", "Бесплатные превью закончились");
+      if (opts.order) {
+        const existing = this.one<Order>("SELECT data FROM purchases WHERE user_id = ? AND idem_key = ?", p.userId, opts.order.idempotencyKey);
+        if (existing) {
+          const prev = this.one<Preview>("SELECT data FROM previews WHERE id = ?", existing.refId);
+          if (prev) return { preview: prev, reused: true };
+        }
+      } else if (opts.freeLimit !== undefined) {
+        if (this.freeUsed(p.userId) >= opts.freeLimit) throw new LimitError("preview_limit", "Бесплатное превью уже использовано");
+      }
       const seqRow = this.db
         .prepare(
           "SELECT COUNT(*) AS n FROM previews WHERE draft_id = ? AND json_extract(data,'$.kind') = ? AND IFNULL(json_extract(data,'$.roleId'),'') = ?",
@@ -195,16 +201,19 @@ export class LocalRepo implements Repo {
         preview.personId ?? null,
         JSON.stringify(preview),
       );
-      this.run(
-        "INSERT INTO usage (id, user_id, kind, ref_id, data) VALUES (?, ?, ?, ?, ?)",
-        usage.id,
-        usage.userId,
-        usage.kind,
-        usage.refId,
-        JSON.stringify(usage),
-      );
-      return preview;
+      this.run("INSERT INTO usage (id, user_id, kind, ref_id, data) VALUES (?, ?, ?, ?, ?)", usage.id, usage.userId, usage.kind, usage.refId, JSON.stringify(usage));
+      if (opts.order) this.insertOrder(opts.order);
+      return { preview, reused: false };
     });
+  }
+  private freeUsed(userId: string): number {
+    const r = this.db
+      .prepare("SELECT COUNT(*) AS n FROM usage WHERE user_id = ? AND kind = 'preview_image' AND refunded = 0 AND json_extract(data,'$.free') = 1")
+      .get(userId) as { n: number };
+    return Number(r.n);
+  }
+  async countFreePreviews(userId: string) {
+    return this.freeUsed(userId);
   }
   async updatePreview(id: string, patch: Partial<Preview>) {
     return this.tx(() => {
@@ -235,7 +244,7 @@ export class LocalRepo implements Repo {
   }
   async resetDemoUsage(userId: string) {
     // only demo events can be reset — real spend is never forgotten
-    this.run("UPDATE usage SET refunded = 1 WHERE user_id = ? AND kind = 'preview_image' AND json_extract(data,'$.isDemo') = 1", userId);
+    this.run("UPDATE usage SET refunded = 1 WHERE user_id = ? AND kind = 'preview_image' AND json_extract(data,'$.isDemo') = 1 AND json_extract(data,'$.free') = 1", userId);
   }
 
   /* jobs */
@@ -337,7 +346,6 @@ export class LocalRepo implements Repo {
     if ((ACTIVE_JOB_STATUSES as readonly string[]).includes(j.status))
       throw new ConflictError("Видео ещё создаётся — удалить можно после завершения");
     this.run("DELETE FROM jobs WHERE id = ? AND user_id = ?", id, userId);
-    this.run("DELETE FROM orders WHERE job_id = ? AND user_id = ?", id, userId);
     return [j.resultKey, j.rawResultKey].filter((k): k is string => Boolean(k));
   }
 
@@ -346,11 +354,35 @@ export class LocalRepo implements Repo {
   }
 
   /* orders */
-  async createOrder(o: Order) {
-    this.run("INSERT INTO orders (id, user_id, job_id, data) VALUES (?, ?, ?, ?)", o.id, o.userId, o.jobId, JSON.stringify(o));
-    return o;
+  private insertOrder(o: Order) {
+    this.run(
+      "INSERT INTO purchases (id, user_id, ref_id, idem_key, status, data) VALUES (?, ?, ?, ?, ?, ?)",
+      o.id,
+      o.userId,
+      o.refId,
+      o.idempotencyKey,
+      o.status,
+      JSON.stringify(o),
+    );
   }
-  async getOrderForJob(userId: string, jobId: string) {
-    return this.one<Order>("SELECT data FROM orders WHERE job_id = ? AND user_id = ?", jobId, userId);
+  async createOrder(o: Order) {
+    return this.tx(() => {
+      const existing = this.one<Order>("SELECT data FROM purchases WHERE user_id = ? AND idem_key = ?", o.userId, o.idempotencyKey);
+      if (existing) return existing;
+      this.insertOrder(o);
+      return o;
+    });
+  }
+  async getOrderForRef(userId: string, refId: string) {
+    return this.one<Order>("SELECT data FROM purchases WHERE ref_id = ? AND user_id = ?", refId, userId);
+  }
+  async refundOrderForRef(refId: string) {
+    const rows = this.db.prepare("SELECT id, data FROM purchases WHERE ref_id = ? AND status = 'test_paid'").all(refId) as { id: string; data: string }[];
+    for (const r of rows)
+      this.run(
+        "UPDATE purchases SET status = 'refunded', data = ? WHERE id = ?",
+        JSON.stringify({ ...JSON.parse(r.data), status: "refunded", refundedAt: new Date().toISOString() }),
+        r.id,
+      );
   }
 }

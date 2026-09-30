@@ -71,6 +71,7 @@ const previewFrom = (r: R): Preview => ({
   storageKey: undef(r.storage_key),
   error: undef(r.error),
   seq: r.seq,
+  paid: Boolean(r.paid),
   createdAt: r.created_at,
   finishedAt: undef(r.finished_at),
 });
@@ -137,7 +138,7 @@ const jobTo = (p: Partial<Job>): R => {
 };
 
 const LIMIT_MESSAGES: Record<string, string> = {
-  preview_limit: "Бесплатные превью закончились",
+  preview_limit: "Бесплатное превью уже использовано",
   active_jobs: "Предыдущее видео ещё создаётся — дождитесь его, чтобы начать новое",
   global_jobs: "Сейчас создаётся много видео. Попробуйте через несколько минут",
   daily_jobs: "На сегодня лимит видео исчерпан",
@@ -262,8 +263,6 @@ export class SupabaseRepo implements Repo {
         assignments[a.role_id] = {
           personId: a.person_id,
           look: a.look,
-          selectedPreviewId: undef(a.selected_preview_id),
-          confirmedPreviewId: undef(a.confirmed_preview_id),
         };
       return {
         id: r.id,
@@ -274,7 +273,6 @@ export class SupabaseRepo implements Repo {
         assignments,
         scene: r.scene,
         sceneSelectedPreviewId: undef(r.scene_selected_preview_id),
-        sceneConfirmedPreviewId: undef(r.scene_confirmed_preview_id),
         lastJobId: undef(r.last_job_id),
         createdAt: r.created_at,
         updatedAt: r.updated_at,
@@ -297,7 +295,6 @@ export class SupabaseRepo implements Repo {
       version: d.version,
       scene: d.scene,
       scene_selected_preview_id: d.sceneSelectedPreviewId ?? null,
-      scene_confirmed_preview_id: d.sceneConfirmedPreviewId ?? null,
       last_job_id: d.lastJobId ?? null,
       created_at: d.createdAt,
       updated_at: d.updatedAt,
@@ -313,8 +310,6 @@ export class SupabaseRepo implements Repo {
         user_id: d.userId,
         person_id: a.personId,
         look: a.look,
-        selected_preview_id: a.selectedPreviewId ?? null,
-        confirmed_preview_id: a.confirmedPreviewId ?? null,
       }));
     if (rows.length) check(await this.db.from("draft_assignments").insert(rows));
   }
@@ -346,8 +341,8 @@ export class SupabaseRepo implements Repo {
     const r = check(await this.db.from("previews").select("*").eq("user_id", userId).eq("id", id).maybeSingle());
     return r ? previewFrom(r) : null;
   }
-  async reservePreview(p: Preview, u: UsageEvent, limit: number) {
-    const res = await this.db.rpc("reserve_preview", {
+  async reservePreview(p: Preview, u: UsageEvent, opts: { freeLimit?: number; order?: Order }) {
+    const res = await this.db.rpc("reserve_preview_v2", {
       p: {
         id: p.id,
         user_id: p.userId,
@@ -359,6 +354,7 @@ export class SupabaseRepo implements Repo {
         draft_version: p.draftVersion,
         provider: p.provider,
         is_demo: p.isDemo,
+        paid: Boolean(opts.order),
       },
       u: {
         id: u.id,
@@ -366,13 +362,27 @@ export class SupabaseRepo implements Repo {
         provider: u.provider,
         is_demo: u.isDemo,
         ref_id: u.refId,
+        free: Boolean(u.free),
         estimated_cost: u.estimatedCost ?? null,
         currency: u.currency,
       },
-      lim: limit,
+      free_limit: opts.freeLimit ?? null,
+      o: opts.order ? this.orderRow(opts.order) : null,
     });
     if (res.error) throw limitFrom(res.error.message) ?? new Error(`supabase: ${res.error.message}`);
-    return previewFrom(res.data as R);
+    const row = (res.data as R[])[0];
+    return { preview: previewFrom(row.preview), reused: Boolean(row.reused) };
+  }
+  async countFreePreviews(userId: string) {
+    const res = await this.db
+      .from("usage_events")
+      .select("id", { count: "exact", head: true })
+      .eq("user_id", userId)
+      .eq("kind", "preview_image")
+      .eq("free", true)
+      .eq("refunded", false);
+    if (res.error) throw new Error(res.error.message);
+    return res.count ?? 0;
   }
   async updatePreview(id: string, patch: Partial<Preview>) {
     const r = check(await this.db.from("previews").update(previewTo(patch)).eq("id", id).select("*").single());
@@ -411,7 +421,7 @@ export class SupabaseRepo implements Repo {
   }
   async resetDemoUsage(userId: string) {
     // only demo events can be reset — real spend is never forgotten
-    check(await this.db.from("usage_events").update({ refunded: true }).eq("user_id", userId).eq("kind", "preview_image").eq("is_demo", true));
+    check(await this.db.from("usage_events").update({ refunded: true }).eq("user_id", userId).eq("kind", "preview_image").eq("is_demo", true).eq("free", true));
   }
 
   /* jobs */
@@ -485,36 +495,52 @@ export class SupabaseRepo implements Repo {
     );
   }
 
-  /* orders */
-  async createOrder(o: Order) {
-    check(
-      await this.db.from("orders").insert({
-        id: o.id,
-        user_id: o.userId,
-        job_id: o.jobId,
-        amount_minor: o.amountMinor,
-        currency: o.currency,
-        price_is_example: o.priceIsExample,
-        status: o.status,
-        method: o.method,
-      }),
-    );
-    return o;
+  /* purchases */
+  private orderRow(o: Order): R {
+    return {
+      id: o.id,
+      user_id: o.userId,
+      kind: o.kind,
+      ref_id: o.refId,
+      idempotency_key: o.idempotencyKey,
+      amount_minor: o.amountMinor,
+      currency: o.currency,
+      price_is_example: o.priceIsExample,
+      status: o.status,
+      method: o.method,
+    };
   }
-  async getOrderForJob(userId: string, jobId: string) {
-    const r = check(await this.db.from("orders").select("*").eq("user_id", userId).eq("job_id", jobId).maybeSingle());
-    return r
-      ? ({
-          id: r.id,
-          userId: r.user_id,
-          jobId: r.job_id,
-          amountMinor: r.amount_minor,
-          currency: r.currency,
-          priceIsExample: r.price_is_example,
-          status: r.status,
-          method: r.method,
-          createdAt: r.created_at,
-        } as Order)
-      : null;
+  private orderFrom(r: R): Order {
+    return {
+      id: r.id,
+      userId: r.user_id,
+      kind: r.kind,
+      refId: r.ref_id,
+      idempotencyKey: r.idempotency_key,
+      amountMinor: r.amount_minor,
+      currency: r.currency,
+      priceIsExample: r.price_is_example,
+      status: r.status,
+      method: r.method,
+      createdAt: r.created_at,
+      refundedAt: undef(r.refunded_at),
+    };
+  }
+  async createOrder(o: Order) {
+    const res = await this.db.from("purchases").insert(this.orderRow(o)).select("*").maybeSingle();
+    if (res.error) {
+      // unique (user_id, idempotency_key): the same purchase already exists
+      const existing = check(await this.db.from("purchases").select("*").eq("user_id", o.userId).eq("idempotency_key", o.idempotencyKey).maybeSingle());
+      if (existing) return this.orderFrom(existing);
+      throw new Error(`supabase: ${res.error.message}`);
+    }
+    return res.data ? this.orderFrom(res.data) : o;
+  }
+  async getOrderForRef(userId: string, refId: string) {
+    const r = check(await this.db.from("purchases").select("*").eq("user_id", userId).eq("ref_id", refId).maybeSingle());
+    return r ? this.orderFrom(r) : null;
+  }
+  async refundOrderForRef(refId: string) {
+    check(await this.db.from("purchases").update({ status: "refunded", refunded_at: new Date().toISOString() }).eq("ref_id", refId).eq("status", "test_paid"));
   }
 }

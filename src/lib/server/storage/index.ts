@@ -93,5 +93,6 @@ export const keys = {
   photo: (userId: string, id: string, ext: string) => `u/${userId}/photos/${id}.${ext}`,
   preview: (userId: string, id: string, ext: string) => `u/${userId}/previews/${id}.${ext}`,
   result: (userId: string, jobId: string) => `u/${userId}/results/${jobId}.mp4`,
+  poster: (userId: string, jobId: string) => `u/${userId}/results/${jobId}.jpg`,
   raw: (userId: string, jobId: string, attempt: number) => `u/${userId}/results/${jobId}.raw${attempt}.mp4`,
 };

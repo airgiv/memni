@@ -1,7 +1,8 @@
 "use client";
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { Badge, Button, EmptyState, FancyIcon, Skeleton, type BadgeVariant } from "@/ui/rapui";
+import { Badge, EmptyState, FancyIcon, Skeleton, type BadgeVariant } from "@/ui/rapui";
+import { Button } from "@/ui/Button";
 import { api } from "@/client/api";
 import type { PublicJob } from "@/lib/server/services/jobs";
 
@@ -21,15 +22,14 @@ export function OrdersList({ titles }: { titles: Record<string, string> }) {
     api<PublicJob[]>("/api/jobs").then(setJobs).catch(() => setJobs([]));
   }, []);
   return (
-    <div className="page flex flex-col gap-6 pt-6 md:pt-10">
-      <h1 className="text-[2rem] font-medium tracking-[-0.03em]">Мои видео</h1>
+    <div className="page flex flex-col gap-5 pt-2 md:pt-6">
+      <h1 className="text-[1.75rem] font-medium tracking-[-0.03em]">Мои видео</h1>
       {!jobs ? (
         <Skeleton height={200} />
       ) : jobs.length === 0 ? (
         <EmptyState
           icon={<FancyIcon icon="clapperboard" tone="flame" float />}
           title="Видео пока нет"
-          description="Выберите мем, назначьте людей — и видео появится здесь."
           action={
             <Link href="/">
               <Button variant="accent">К мемам</Button>
@@ -45,9 +45,9 @@ export function OrdersList({ titles }: { titles: Record<string, string> }) {
                   <Badge variant={STATUS[j.status]?.variant ?? "neutral"} live={["queued", "submitting", "generating", "assembling"].includes(j.status)}>
                     {STATUS[j.status]?.label ?? j.status}
                   </Badge>
-                  {j.isDemo && <Badge variant="warning">Демо</Badge>}
+                  {j.isDemo && <Badge variant="warning">демо</Badge>}
                 </div>
-                <span className="text-[1.25rem] font-medium tracking-[-0.02em]">{titles[j.input.templateId] ?? j.input.templateId}</span>
+                <span className="text-[1.25rem] font-medium tracking-[-0.02em]">{titles[j.templateId] ?? j.templateId}</span>
                 <span className="text-[0.8125rem] text-mute">{new Date(j.createdAt).toLocaleString("ru-RU", { dateStyle: "medium", timeStyle: "short" })}</span>
               </Link>
             </li>

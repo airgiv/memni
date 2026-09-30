@@ -13,7 +13,7 @@ export const GET = handle(async (_req: Request, ctx: RouteCtx<P>) => {
   return json(presentDraft(await draftView(await requireUserId(), id)));
 });
 
-const OPS = new Set(["assign", "swap", "clear", "look", "scene", "select", "confirm", "unconfirm"]);
+const OPS = new Set(["assign", "swap", "clear", "look", "select"]);
 
 export const PATCH = handle(async (req: Request, ctx: RouteCtx<P>) => {
   const { id } = await ctx.params;

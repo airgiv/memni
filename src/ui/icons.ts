@@ -16,6 +16,7 @@ export {
   Play,
   Plus,
   RefreshCw,
+  Search,
   Settings2,
   Sparkles,
   Star,

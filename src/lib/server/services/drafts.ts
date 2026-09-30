@@ -1,35 +1,34 @@
 /**
  * Drafts: loading with reconciliation, mutations with optimistic versioning,
- * selecting and confirming previews. Confirming never triggers generation.
+ * and the view the constructor renders (people, looks, previews, quotes).
  */
 import { randomUUID } from "node:crypto";
-import { getConfig } from "../../config";
-import {
-  assignPerson,
-  clearRole,
-  DraftError,
-  reconcile,
-  sameDraftState,
-  setLook,
-  setScene,
-  swapRoles,
-  type PersonInputs,
-} from "../../domain/draft";
+import { assignPerson, clearRole, defaultLook, DraftError, reconcile, rolesReady, sameDraftState, setLook, swapRoles, type PersonInputs } from "../../domain/draft";
 import type { Draft, Job, LookSettings, Person, Photo, Preview } from "../../domain/types";
 import { getTemplate, type TemplateDef } from "../../templates";
 import { getImageProvider } from "../../providers/image";
 import { getVideoProvider, planVideoInputs, type InputPlan } from "../../providers/video";
 import { ConflictError, getRepo } from "../repo";
+import { previewQuote, videoPrice, type Quote } from "../pricing";
 import { UserError } from "./errors";
 
 export function templateOr404(id: string): TemplateDef {
   const t = getTemplate(id);
-  if (!t) throw new UserError("not_found", "Шаблон не найден", 404);
+  if (!t) throw new UserError("not_found", "Мем не найден", 404);
   return t;
 }
 
-export async function createDraft(userId: string, templateId: string, fromDraftId?: string): Promise<Draft> {
+/**
+ * Opens the user's unfinished draft of this meme, or starts a new one. With
+ * `fromDraftId` («сделать ещё с теми же людьми») people are carried over in role order.
+ */
+export async function openDraft(userId: string, templateId: string, fromDraftId?: string): Promise<Draft> {
   const t = templateOr404(templateId);
+  const repo = getRepo();
+  if (!fromDraftId) {
+    const open = (await repo.listDrafts(userId)).find((d) => d.templateId === t.id && d.templateVersion === t.version && !d.lastJobId);
+    if (open) return open;
+  }
   const now = new Date().toISOString();
   const draft: Draft = {
     id: randomUUID(),
@@ -42,51 +41,15 @@ export async function createDraft(userId: string, templateId: string, fromDraftI
     createdAt: now,
     updatedAt: now,
   };
-  // «другой мем с теми же людьми»: carry people over in role order
   if (fromDraftId) {
-    const prev = await getRepo().getDraft(userId, fromDraftId);
-    if (prev) {
-      const prevT = getTemplate(prev.templateId);
-      const people = (prevT?.roles ?? []).map((r) => prev.assignments[r.id]?.personId).filter((x): x is string => Boolean(x));
-      t.roles.forEach((r, i) => {
-        if (people[i]) draft.assignments[r.id] = { personId: people[i], look: { clothing: t.look.defaultClothing, glasses: t.look.glassesOption ? "as-photo" : undefined } };
-      });
-    }
+    const prev = await repo.getDraft(userId, fromDraftId);
+    const prevT = prev ? getTemplate(prev.templateId) : undefined;
+    const people = (prevT?.roles ?? []).map((r) => prev!.assignments[r.id]?.personId).filter((x): x is string => Boolean(x));
+    t.roles.forEach((r, i) => {
+      if (people[i]) draft.assignments[r.id] = { personId: people[i], look: defaultLook(t) };
+    });
   }
-  return getRepo().createDraft(draft);
-}
-
-export interface RoleView {
-  roleId: string;
-  person: (Person & { photos: Photo[] }) | null;
-  look: LookSettings | null;
-  fingerprint: string | null;
-  previews: Preview[];
-  selectedPreviewId: string | null;
-  confirmedPreviewId: string | null;
-  photosReady: boolean;
-}
-
-export interface DraftView {
-  draft: Draft;
-  roles: RoleView[];
-  scene: {
-    fingerprint: string;
-    previews: Preview[];
-    selectedPreviewId: string | null;
-    confirmedPreviewId: string | null;
-    canGenerate: boolean;
-  };
-  video: {
-    canStart: boolean;
-    plan: InputPlan;
-    provider: string;
-    isDemo: boolean;
-    lastJob: Job | null;
-  };
-  quota: { used: number; limit: number; left: number };
-  /** confirmations dropped while loading (e.g. a photo was deleted in another tab) */
-  cleared: { roleId?: string; scene?: boolean }[];
+  return repo.createDraft(draft);
 }
 
 async function context(userId: string, draft: Draft) {
@@ -98,8 +61,13 @@ async function context(userId: string, draft: Draft) {
     repo.listPreviews(userId, draft.id),
   ]);
   const map = new Map<string, PersonInputs>();
-  for (const p of people) if (p) map.set(p.id, { person: p, photos: photos.filter((x) => x.personId === p.id) });
-  return { people: map, previews: new Map(previews.map((p) => [p.id, p])), previewList: previews };
+  for (const p of people) if (p) map.set(p.id, { person: p, photos: sortPhotos(p, photos.filter((x) => x.personId === p.id)) });
+  return { people: map, previews: new Map(previews.map((p) => [p.id, p])), previewList: previews.filter((p) => p.kind === "scene") };
+}
+
+/** main photo first */
+function sortPhotos(p: Person, photos: Photo[]) {
+  return [...photos].sort((a, b) => (a.id === p.mainPhotoId ? -1 : b.id === p.mainPhotoId ? 1 : a.createdAt.localeCompare(b.createdAt)));
 }
 
 /** Load + reconcile + persist if reconciliation changed anything. */
@@ -126,48 +94,45 @@ export async function loadDraft(userId: string, draftId: string) {
   throw new ConflictError();
 }
 
+export interface DraftView {
+  draft: Draft;
+  roles: { roleId: string; person: (Person & { photos: Photo[] }) | null; look: LookSettings | null; ready: boolean }[];
+  ready: boolean;
+  inputsFingerprint: string;
+  previews: Preview[];
+  selectedPreviewId: string | null;
+  quotes: { preview: Quote; video: Quote };
+  video: { preview: InputPlan; direct: InputPlan; isDemo: boolean; lastJob: Job | null };
+}
+
 export async function draftView(userId: string, draftId: string): Promise<DraftView> {
-  const c = getConfig();
   const repo = getRepo();
   const { t, draft, ctx, rec } = await loadDraft(userId, draftId);
-  const roles: RoleView[] = t.roles.map((r) => {
-    const a = draft.assignments[r.id];
-    const p = a ? ctx.people.get(a.personId) : undefined;
-    return {
-      roleId: r.id,
-      person: p ? { ...p.person, photos: p.photos } : null,
-      look: a?.look ?? null,
-      fingerprint: rec.roleFingerprints[r.id] ?? null,
-      previews: ctx.previewList.filter((x) => x.kind === "person" && x.roleId === r.id),
-      selectedPreviewId: a?.selectedPreviewId ?? null,
-      confirmedPreviewId: a?.confirmedPreviewId ?? null,
-      photosReady: Boolean(p && p.photos.length >= t.photoRequirements.minPhotos),
-    };
-  });
-  const allConfirmed = roles.every((r) => r.confirmedPreviewId);
   const vp = getVideoProvider();
-  const plan = planVideoInputs(t, vp.capabilities, vp.isDemo ? "Демо-адаптер" : vp.name);
   const lastJob = draft.lastJobId ? await repo.getJob(userId, draft.lastJobId) : null;
-  const used = await repo.countUsage(userId, "preview_image");
   return {
     draft,
-    roles,
-    scene: {
-      fingerprint: rec.sceneFingerprint,
-      previews: ctx.previewList.filter((x) => x.kind === "scene"),
-      selectedPreviewId: draft.sceneSelectedPreviewId ?? null,
-      confirmedPreviewId: draft.sceneConfirmedPreviewId ?? null,
-      canGenerate: allConfirmed,
-    },
+    roles: t.roles.map((r) => {
+      const a = draft.assignments[r.id];
+      const p = a ? ctx.people.get(a.personId) : undefined;
+      return {
+        roleId: r.id,
+        person: p ? { ...p.person, photos: p.photos } : null,
+        look: a?.look ?? null,
+        ready: Boolean(p && p.photos.length >= t.photoRequirements.minPhotos),
+      };
+    }),
+    ready: rolesReady(t, draft, ctx.people),
+    inputsFingerprint: rec.inputsFingerprint,
+    previews: ctx.previewList,
+    selectedPreviewId: draft.sceneSelectedPreviewId ?? null,
+    quotes: { preview: await previewQuote(userId), video: { free: false, price: videoPrice(t) } },
     video: {
-      canStart: Boolean(draft.sceneConfirmedPreviewId) && plan.ok,
-      plan,
-      provider: vp.name,
+      preview: planVideoInputs(t, vp.capabilities, "preview"),
+      direct: planVideoInputs(t, vp.capabilities, "direct"),
       isDemo: vp.isDemo || getImageProvider().isDemo,
       lastJob,
     },
-    quota: { used, limit: c.limits.freePreviewsPerUser, left: Math.max(0, c.limits.freePreviewsPerUser - used) },
-    cleared: rec.cleared,
   };
 }
 
@@ -176,19 +141,18 @@ export type DraftOp =
   | { op: "swap"; roleA: string; roleB: string }
   | { op: "clear"; roleId: string }
   | { op: "look"; roleId: string; look: Partial<LookSettings> }
-  | { op: "scene"; optionId: string }
-  | { op: "select"; roleId?: string; previewId: string }
-  | { op: "confirm"; roleId?: string; previewId: string }
-  | { op: "unconfirm"; roleId?: string };
+  | { op: "select"; previewId: string };
 
 /**
  * Apply one change. `expectedVersion` is the version the client last saw:
  * if the draft moved on in the meantime, the client gets 409 and reloads.
+ * Selecting an existing preview is free and never generates anything.
  */
 export async function mutateDraft(userId: string, draftId: string, expectedVersion: number, op: DraftOp): Promise<DraftView> {
   const repo = getRepo();
-  const { t, draft, ctx, rec } = await loadDraft(userId, draftId);
-  if (draft.version !== expectedVersion) throw new ConflictError();
+  const { t, draft, ctx } = await loadDraft(userId, draftId);
+  // picking a variant is harmless to repeat, so a newer version (e.g. a preview just finished) does not block it
+  if (draft.version !== expectedVersion && op.op !== "select") throw new ConflictError();
   let next: Draft;
   try {
     switch (op.op) {
@@ -207,61 +171,19 @@ export async function mutateDraft(userId: string, draftId: string, expectedVersi
       case "look":
         next = setLook(t, draft, op.roleId, op.look);
         break;
-      case "scene":
-        next = setScene(t, draft, op.optionId);
-        break;
-      case "select":
-      case "confirm": {
+      case "select": {
         const preview = ctx.previews.get(op.previewId);
-        if (!preview || preview.status !== "ready") throw new UserError("not_ready", "Этот вариант ещё не готов");
-        next = structuredClone(draft);
-        if (op.roleId) {
-          const a = next.assignments[op.roleId];
-          if (!a || preview.kind !== "person" || preview.roleId !== op.roleId || preview.personId !== a.personId)
-            throw new UserError("bad_preview", "Этот вариант относится к другой роли или другому человеку");
-          a.selectedPreviewId = preview.id;
-          if (op.op === "confirm") {
-            if (preview.fingerprint !== rec.roleFingerprints[op.roleId])
-              throw new UserError("stale_preview", "Этот вариант сделан для прежних фото или настроек. Создайте новый — или верните прежние настройки");
-            a.confirmedPreviewId = preview.id;
-          }
-        } else {
-          if (preview.kind !== "scene") throw new UserError("bad_preview", "Это не превью сцены");
-          next.sceneSelectedPreviewId = preview.id;
-          if (op.op === "confirm") {
-            if (!t.roles.every((r) => draft.assignments[r.id]?.confirmedPreviewId))
-              throw new UserError("roles_unconfirmed", "Сначала подтвердите образ каждого участника");
-            if (preview.fingerprint !== rec.sceneFingerprint)
-              throw new UserError("stale_preview", "Это фото сцены сделано для прежнего состава или настроек — создайте новое");
-            next.sceneConfirmedPreviewId = preview.id;
-          }
-        }
+        if (!preview || preview.kind !== "scene" || preview.status !== "ready") throw new UserError("not_ready", "Этот вариант ещё не готов");
+        next = { ...structuredClone(draft), sceneSelectedPreviewId: preview.id };
         break;
       }
-      case "unconfirm":
-        next = structuredClone(draft);
-        if (op.roleId) {
-          const a = next.assignments[op.roleId];
-          if (a) a.confirmedPreviewId = undefined;
-        } else next.sceneConfirmedPreviewId = undefined;
-        break;
     }
   } catch (e) {
     if (e instanceof DraftError) throw new UserError(e.code, e.message);
     throw e;
   }
-  // reconcile again: changes to roles/looks drop dependent confirmations right here
-  const after = reconcile(t, next, await context(userId, next)).draft;
-  const saved = { ...after, version: draft.version + 1, updatedAt: new Date().toISOString() };
-  await repo.updateDraft(saved, draft.version);
-  const view = await draftView(userId, draftId);
-  // report every confirmation this change removed, so the UI can say why
-  const cleared: DraftView["cleared"] = t.roles
-    .filter((r) => draft.assignments[r.id]?.confirmedPreviewId && !saved.assignments[r.id]?.confirmedPreviewId)
-    .map((r) => ({ roleId: r.id }));
-  if (draft.sceneConfirmedPreviewId && !saved.sceneConfirmedPreviewId) cleared.push({ scene: true });
-  if (op.op === "unconfirm") return view;
-  return { ...view, cleared };
+  await repo.updateDraft({ ...next, version: draft.version + 1, updatedAt: new Date().toISOString() }, draft.version);
+  return draftView(userId, draftId);
 }
 
 export async function listDrafts(userId: string) {
@@ -271,7 +193,6 @@ export async function listDrafts(userId: string) {
     templateId: d.templateId,
     updatedAt: d.updatedAt,
     assigned: Object.values(d.assignments).filter(Boolean).length,
-    sceneConfirmed: Boolean(d.sceneConfirmedPreviewId),
     lastJobId: d.lastJobId ?? null,
   }));
 }

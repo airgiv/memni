@@ -20,7 +20,6 @@ export {
   Avatar,
   AvatarGroup,
   Badge,
-  Button,
   ButtonGroup,
   Card,
   CardContent,
