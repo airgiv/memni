@@ -1,5 +1,5 @@
-import type { Job } from "../../domain/types";
-import type { TemplateDef } from "../../templates/types";
+import type { Job, ReplacementScope } from "../../domain/types";
+import type { MemeDef } from "../../../memes/types";
 
 /** What a video model can take. Only supported combinations are ever sent. */
 export interface VideoCapabilities {
@@ -20,6 +20,11 @@ export interface VideoCapabilities {
   /** inputs must be public HTTPS URLs (not bytes) */
   needsPublicUrls: boolean;
   maxDurationSec: number;
+  /**
+   * What the model can actually change. A face-swap model is "face-only": it
+   * keeps the performer's body, so prompts never ask it for one.
+   */
+  replaces: ReplacementScope;
 }
 
 export interface VideoSubmitRequest {
@@ -76,20 +81,36 @@ export interface VideoProvider {
 
 export interface InputPlan {
   ok: boolean;
-  /** short user-facing reason when not ok */
-  problem?: string;
+  /** stable code when not ok; the browser shows a localized reason */
+  problem?: "no_motion" | "too_long" | "no_image_reference" | "no_direct";
+  /**
+   * "direct" mode with a model that needs one prepared image: the worker
+   * makes an internal reference frame first (never shown, not charged separately)
+   */
+  internalFrame?: boolean;
 }
 
 /**
- * Can this provider run the template's scenario in this mode? Only supported
+ * Can this provider run the meme's scenario in this mode? Only supported
  * combinations are ever sent; an unsupported path is reported, not faked.
  */
-export function planVideoInputs(t: TemplateDef, caps: VideoCapabilities, mode: "preview" | "direct"): InputPlan {
-  if (t.pipeline.video.needsMotionReference && !caps.motionReference)
-    return { ok: false, problem: "Видео для этого мема пока недоступно" };
-  if (t.durationSec > caps.maxDurationSec) return { ok: false, problem: "Этот мем слишком длинный для видеосервиса" };
-  if (mode === "preview") return caps.imageReference ? { ok: true } : { ok: false, problem: "Видео по превью пока недоступно" };
+export function planVideoInputs(
+  t: MemeDef,
+  caps: VideoCapabilities,
+  mode: "preview" | "direct",
+  frameMaker?: { scene: unknown } | null,
+): InputPlan {
+  if (t.generation.video.needsMotionReference && !caps.motionReference) return { ok: false, problem: "no_motion" };
+  if (t.durationSec > caps.maxDurationSec) return { ok: false, problem: "too_long" };
+  if (mode === "preview") return caps.imageReference ? { ok: true } : { ok: false, problem: "no_image_reference" };
   if (caps.withoutPreview === "any") return { ok: true };
   if (caps.withoutPreview === "single-person" && t.roles.length === 1) return { ok: true };
-  return { ok: false, problem: "Для этого мема видео без превью пока недоступно" };
+  // the model needs one prepared image: the pipeline can make it internally
+  if (caps.imageReference && frameMaker) return { ok: true, internalFrame: true };
+  return { ok: false, problem: "no_direct" };
+}
+
+/** The weakest link decides: if any model in the chain only swaps faces, the result only swaps faces. */
+export function replacementScope(video: Pick<VideoCapabilities, "replaces">, image: { replaces: ReplacementScope }): ReplacementScope {
+  return video.replaces === "face-only" || image.replaces === "face-only" ? "face-only" : "whole-person";
 }

@@ -59,6 +59,8 @@ export class KlingVideoProvider implements VideoProvider {
     needsPublicUrls: true,
     // per docs excerpt: character_orientation "image" → reference ≤ 10 s, "video" → ≤ 30 s (we send "video")
     maxDurationSec: 30,
+    // the character image drives the whole person (face, hair, body, clothes) — not a face swap
+    replaces: "whole-person" as const,
   };
 
   constructor(private cfg: AppConfig["kling"]) {
@@ -66,7 +68,7 @@ export class KlingVideoProvider implements VideoProvider {
   }
 
   private async request<T>(method: "GET" | "POST", path: string, body?: unknown): Promise<T> {
-    if (!this.cfg.accessKey || !this.cfg.secretKey) throw new VideoProviderError("config", "Ключи Kling не заданы");
+    if (!this.cfg.accessKey || !this.cfg.secretKey) throw new VideoProviderError("config", "Kling keys are not set");
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 30_000);
     let res: Response;
@@ -81,7 +83,7 @@ export class KlingVideoProvider implements VideoProvider {
         body: body ? JSON.stringify(body) : undefined,
       });
     } catch (e) {
-      throw new VideoProviderError((e as Error).name === "AbortError" ? "timeout" : "network", "Нет ответа от Kling");
+      throw new VideoProviderError((e as Error).name === "AbortError" ? "timeout" : "network", "No answer from Kling");
     } finally {
       clearTimeout(timer);
     }
@@ -94,9 +96,9 @@ export class KlingVideoProvider implements VideoProvider {
   async submit(req: VideoSubmitRequest) {
     const image = req.mode === "preview" ? req.sceneImageUrl : req.peopleImageUrls.length === 1 ? req.peopleImageUrls[0][0] : undefined;
     if (req.mode === "direct" && req.peopleImageUrls.length !== 1)
-      throw new VideoProviderError("unsupported", "Без превью Kling работает только с мемами на одного человека");
+      throw new VideoProviderError("unsupported", "Without a prepared image Kling works only for one-person memes");
     if (!image || !req.sourceVideoUrl)
-      throw new VideoProviderError("unsupported", "Kling нужны публичные ссылки на изображение и исходный ролик");
+      throw new VideoProviderError("unsupported", "Kling needs public URLs for the image and the source clip");
     const data = await this.request<KlingTask>("POST", "/v1/videos/motion-control", {
       model_name: this.cfg.model,
       image_url: image,
@@ -120,7 +122,7 @@ export class KlingVideoProvider implements VideoProvider {
       case "succeed":
         return { state: "succeeded", videoUrl: t.task_result?.videos?.[0]?.url };
       default:
-        return { state: "failed", error: t.task_status_msg || "Kling не смог создать видео" };
+        return { state: "failed", error: t.task_status_msg || "Kling could not create the video" };
     }
   }
 
@@ -135,9 +137,9 @@ export class KlingVideoProvider implements VideoProvider {
   }
 
   async fetchResult(status: VideoStatus, _job: Job) {
-    if (!status.videoUrl) throw new VideoProviderError("unknown", "Kling не вернул ссылку на видео");
+    if (!status.videoUrl) throw new VideoProviderError("unknown", "Kling returned no video URL");
     const res = await fetch(status.videoUrl);
-    if (!res.ok) throw new VideoProviderError("network", `Не удалось скачать видео Kling: HTTP ${res.status}`);
+    if (!res.ok) throw new VideoProviderError("network", `Could not download the Kling video: HTTP ${res.status}`);
     return Buffer.from(await res.arrayBuffer());
   }
 

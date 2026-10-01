@@ -1,12 +1,12 @@
 import type { Draft, Job, Order, Person, Photo, Preview, UsageEvent, UsageKind, User } from "../../domain/types";
 
 export class ConflictError extends Error {
-  constructor(message = "Черновик изменился в другой вкладке — обновили до последней версии") {
+  constructor(message = "The draft changed in another tab — reloaded the latest version") {
     super(message);
   }
 }
 export class NotFoundError extends Error {
-  constructor(message = "Не найдено") {
+  constructor(message = "Not found") {
     super(message);
   }
 }

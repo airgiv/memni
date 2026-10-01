@@ -1,78 +1,88 @@
 "use client";
-import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+/** Saved people: rename, delete photos, delete the person. Stays in this browser (prototype). */
+import { useEffect, useState } from "react";
 import { Trash2 } from "lucide-react";
 import { toast } from "sonner";
-import { Button } from "@/ui/button";
-import { Dialog } from "@/ui/dialog";
-import { Spinner } from "@/ui/spinner";
 import { api } from "@/client/api";
+import { errorText, useI18n } from "@/i18n/client";
 import type { PersonDTO } from "@/lib/server/present";
+import { Button, IconButton } from "@/ui/button";
+import { Input } from "@/ui/field";
+import { Spinner } from "@/ui/spinner";
 
-/** The saved-people library. Photos are private; deleting removes the person and their files. */
 export function PeopleManager() {
+  const { m, fmt, plur } = useI18n();
   const [people, setPeople] = useState<PersonDTO[] | null>(null);
-  const [confirm, setConfirm] = useState<PersonDTO | null>(null);
-  const load = useCallback(async () => {
+  const load = () => api<PersonDTO[]>("/api/people").then((l) => setPeople(l.filter((p) => p.saved)), () => setPeople([]));
+  useEffect(() => void load(), []);
+
+  const rename = async (p: PersonDTO, name: string) => {
+    if (!name.trim() || name === p.name) return;
     try {
-      setPeople((await api<PersonDTO[]>("/api/people")).filter((p) => p.saved));
-    } catch (e) {
-      toast.error((e as Error).message);
-      setPeople([]);
-    }
-  }, []);
-  useEffect(() => {
-    void load();
-  }, [load]);
-  const remove = async (p: PersonDTO) => {
-    try {
-      await api(`/api/people/${p.id}`, { method: "DELETE" });
-      setConfirm(null);
+      await api(`/api/people/${p.id}`, { method: "PATCH", json: { name } });
       await load();
     } catch (e) {
-      toast.error((e as Error).message);
+      toast.error(errorText(m, e));
     }
   };
+  const removePerson = async (p: PersonDTO) => {
+    if (!window.confirm(fmt(m.people.confirmDelete, { name: p.name }))) return;
+    try {
+      await api(`/api/people/${p.id}`, { method: "DELETE" });
+      toast(m.people.deleted);
+      await load();
+    } catch (e) {
+      toast.error(errorText(m, e));
+    }
+  };
+  const removePhoto = async (id: string) => {
+    try {
+      await api(`/api/photos/${id}`, { method: "DELETE" });
+      await load();
+    } catch (e) {
+      toast.error(errorText(m, e));
+    }
+  };
+
   return (
-    <div className="mx-auto flex max-w-6xl flex-col gap-4 px-4 pt-5 md:px-6 md:pt-8">
-      <h1 className="text-[20px] font-semibold tracking-tight">Мои люди</h1>
-      {!people ? (
-        <Spinner label="Загружаем" />
+    <main className="mx-auto max-w-3xl px-4 pb-[calc(var(--safe-bottom)+40px)] pt-8 sm:px-6 lg:pt-12">
+      <h1 className="text-[30px] font-semibold tracking-tight">{m.people.title}</h1>
+      <p className="mt-2 max-w-xl text-[14px] text-muted">{m.people.note}</p>
+      {people === null ? (
+        <div className="mt-10 text-muted">
+          <Spinner />
+        </div>
       ) : people.length === 0 ? (
-        <p className="text-muted">
-          Пока никого. <Link href="/" className="text-fg underline underline-offset-4">К мемам</Link>
-        </p>
+        <p className="mt-10 text-muted">{m.people.empty}</p>
       ) : (
-        <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+        <ul className="mt-8 flex flex-col gap-3">
           {people.map((p) => (
-            <li key={p.id} className="overflow-hidden rounded-xl border border-border bg-surface">
-              <div className="grid grid-cols-3 gap-px bg-border">
-                {p.photos.slice(0, 3).map((ph) => (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img key={ph.id} src={ph.url} alt="" className="aspect-[3/4] w-full object-cover" loading="lazy" />
+            <li key={p.id} className="rounded-2xl border border-line bg-surface p-4">
+              <div className="flex items-center gap-3">
+                <label className="flex-1">
+                  <span className="sr-only">{m.people.renameLabel}</span>
+                  <Input defaultValue={p.name} maxLength={40} onBlur={(e) => void rename(p, e.target.value)} className="max-w-xs" />
+                </label>
+                <span className="text-[13px] text-muted">{plur(m.people.photos, p.photos.length)}</span>
+                <Button variant="danger" size="sm" onClick={() => void removePerson(p)}>
+                  {fmt(m.people.deletePerson, { name: "" }).replace(/[:\s]+$/, "")}
+                </Button>
+              </div>
+              <ul className="mt-3 flex flex-wrap gap-2">
+                {p.photos.map((ph) => (
+                  <li key={ph.id} className="relative">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={ph.url} alt="" className="size-20 rounded-xl object-cover" />
+                    <IconButton label={m.people.deletePhoto} size="sm" className="absolute right-1 top-1 bg-black/60 text-white hover:bg-black/80" onClick={() => void removePhoto(ph.id)}>
+                      <Trash2 className="size-3.5" aria-hidden />
+                    </IconButton>
+                  </li>
                 ))}
-              </div>
-              <div className="flex items-center justify-between gap-2 py-1 pr-1 pl-3">
-                <span className="truncate text-[14px]">{p.name}</span>
-                <button type="button" onClick={() => setConfirm(p)} aria-label={`Удалить ${p.name}`} className="grid size-10 place-items-center rounded-md text-muted hover:bg-surface-2 hover:text-danger">
-                  <Trash2 className="size-4" aria-hidden />
-                </button>
-              </div>
+              </ul>
             </li>
           ))}
         </ul>
       )}
-      <Dialog open={confirm !== null} onOpenChange={(v) => !v && setConfirm(null)} title={`Удалить ${confirm?.name ?? ""}?`}>
-        <p className="mb-4 text-[14px] text-muted">Фото и превью с этим человеком удалятся. Готовые видео останутся.</p>
-        <div className="flex justify-end gap-2">
-          <Button variant="secondary" onClick={() => setConfirm(null)}>
-            Отмена
-          </Button>
-          <Button className="!bg-danger !text-bg hover:!bg-danger/90" onClick={() => confirm && void remove(confirm)}>
-            Удалить
-          </Button>
-        </div>
-      </Dialog>
-    </div>
+    </main>
   );
 }

@@ -1,147 +1,123 @@
-# memni — видео-мемы с вами и друзьями (прототип)
+# Мемме — meme videos starring you and your friends (prototype)
 
-Один настоящий мем — **Hotel Lobby** на реальном видео — и короткий путь:
-открыть видео → заменить людей → (по желанию) фото-превью → создать видео с оригинальным звуком.
+Each meme has its own landing page: the original video fills the screen, and one bottom widget carries the whole flow — replace the people, optionally preview one shared image, create the video with the original sound.
 
-Стек: Next.js 16 (App Router), React 19, TypeScript, Tailwind CSS v4, Radix-примитивы (диалог), lucide-иконки. Серверная часть — прежняя: Supabase для реального режима, фоновый обработчик с FFmpeg. Интерфейс только тёмный.
+Stack: Next.js 16 (App Router, static generation for landing pages), React 19, TypeScript, Tailwind CSS v4, Radix primitives for accessible behaviour (dialog, select, dropdown, switch, radio group, collapsible) with a custom visual layer in `src/ui/`. Server: SQLite locally or Supabase, a separate worker with FFmpeg.
 
-> **Демо-режим.** Генерации не подключены: превью — помеченный коллаж из ваших фото, видео — фрагмент мема с вашими фото в углу и оригинальным звуком. Оплата тестовая, без списания.
+> **Demo mode.** No identity replacement is connected. The preview is a labelled collage of your photos on the original frame; the "video" is the original footage with your photos pinned in a corner, plus the original audio. Payments use a test adapter — nothing is charged. The UI says so wherever it matters.
 
-## Реальное видео
-
-Лицензированный исходник **не хранится в git**. Импортируйте его один раз:
-
-```bash
-npm run media:import -- /путь/к/videoplayback_3.mp4
-```
-
-Скрипт вырезает фрагмент 60,5–70,5 с (один непрерывный план с обоими людьми) в `public/templates/hotel-lobby/` (в .gitignore):
-`source.mp4` (движение, без звука), `audio.m4a` (оригинальный звук фрагмента), `example.mp4` (со звуком — для просмотра), `frame.jpg` (опорный кадр на 4,5 с, где оба лица видны) и `roles/left.jpg`, `roles/right.jpg` — вырезки участников. Без этих файлов каталог честно показывает «Видео не подключено».
-
-## Запуск
+## Quick start
 
 ```bash
 npm install
-npm run dev          # http://localhost:3000 — сайт и фоновый обработчик вместе
+npm run media:import -- /path/to/videoplayback_3.mp4   # once: the licensed clip is not in git
+npm run dev                                            # http://localhost:3000 → /en
 ```
 
-Production:
+`media:import` cuts the fragment 60.5–70.5 s into `public/templates/hotel-lobby/` (gitignored): the landing video (MP4 + WebM), the motion source, the original audio, the reference frame, a 3:4 cutout and a round face crop per participant.
 
-```bash
-npm run build && npm start   # сайт
-npm run worker               # фоновый обработчик — отдельный процесс
-```
+Production: `npm run build && npm start` plus `npm run worker` (separate process). Node.js ≥ 22.13.
 
-Проверки:
+Checks:
 
 ```bash
 npm run typecheck
-npm test                                    # модульные тесты
-BASE_URL=http://localhost:3000 npm run e2e  # сквозной сценарий по HTTP (нужны сайт и обработчик)
-npm run media:import -- <видео>              # подключить реальное видео Hotel Lobby
+npm test                                    # unit tests
+BASE_URL=http://localhost:3000 npm run e2e  # HTTP end-to-end (needs site + worker)
 ```
 
-Нужен Node.js 22.13 или новее.
+## Product structure
 
-## Сценарий
-
-| Экран | Что на нём |
+| URL | What |
 |---|---|
-| Каталог `/` | Сетка видео-мемов и поиск. Без цен. Две колонки на телефоне |
-| Мем `/m/[id]` | Реальное видео со звуком, одна строка «Выбери людей → настрой образы → создай видео», кнопка «Заменить людей» |
-| Участник `?s=1…N` | Кадр из видео с этим человеком занимает экран (на десктопе — весь кадр, остальное притемнено; на телефоне — портретная вырезка). Поверх — компактная панель: «Загрузить фото», «Мои люди», «1–3 фото»; после загрузки — миниатюры (заменить/удалить), «Из видео / С фото / Ещё», «Не сохранять», «Дальше» |
-| Прогресс | Миниатюры исходных участников: текущий — рамкой, заполненный — галочкой и фото замены; затем значок видео. Без счётчиков, с `aria-current="step"` |
-| Итог `?s=go` | Пары «кто → кем» и два действия: «Создать видео» и «Сначала фото-превью · бесплатно» |
-| Превью `?s=preview` | Общее изображение, варианты (выбор бесплатный), «Создать видео», «Ещё вариант», «Изменить людей» |
-| Заказ `/orders/[id]` | Статус без процентов, затем видео со звуком, «Скачать», «Сделать ещё» |
+| `/` | Redirects to `/en` (default locale). Never redirects by browser language. |
+| `/{locale}` | Catalog: search, language and market filters (shown when there is more than one), two cards per row on phones |
+| `/{locale}/memes/{slug}` | Meme landing page — the primary entry point. Statically generated per published translation. |
+| `/{locale}/people` | Saved people (stay in this browser) |
+| `/{locale}/videos`, `/{locale}/videos/{id}` | My videos, a finished video |
 
-Цена появляется только в окне подтверждения перед платным действием («Оплатить 99 ₽ · тестовый режим — деньги не спишутся»).
+One page system serves every meme: `src/app/[locale]/memes/[slug]/page.tsx` renders `MemeExperience` from configuration. Nothing is copied per meme.
 
-## Деньги и повторы
+### The meme page
 
-Всё задаётся на сервере (`.env`):
+- Video edge to edge (cover with configurable focal points for phones and desktop), looping, muted, inline; sound and pause controls; sound plays the clip's original track. Under `prefers-reduced-motion` it waits on the poster.
+- No header. A small wordmark links to the catalog.
+- Like · Comments · Share on the right, above the collapsed sheet. No counts exist, so none are shown; comments show an honest empty state. A light stream of hearts rises behind Like; Like adds a small burst. Hearts stop in hidden tabs, on other steps and under reduced motion.
+- The sheet (collapsed): title, "Starring you and your friends", **Replace people**. No prices.
+- The sheet (expanded): what the meme is, origin, music, why it caught on (only with sources), how to make your version, FAQ, sources, language selector, link to the catalog. This text is server-rendered — crawlers read it in the initial HTML; the sheet only reveals it.
 
-| Параметр | По умолчанию |
-|---|---|
-| `FREE_PREVIEWS_PER_USER` | `1` — первое общее превью бесплатно (на пользователя, а не на черновик) |
-| `PREVIEW_PRICE_MINOR` | `4900` — 49 ₽, пример цены |
-| `VIDEO_PRICE_MINOR` | пусто → цена из шаблона (Hotel Lobby: 99 ₽, пример) |
+### The bottom sheet (`src/ui/sheet.tsx`)
 
-- Платное действие выполняется, только если клиент прислал ровно ту сумму, которую показал пользователю. Иначе сервер отвечает 402 и возвращает актуальную цену. Перед каждой оплатой открывается окно с ценой.
-- Возврат назад, перезагрузка или правка черновика не дают нового бесплатного превью.
-- Двойной клик или вторая вкладка:
-  - превью — возвращается уже запущенный запрос или покупка с тем же ключом;
-  - видео — ключ идемпотентности строится из зафиксированных входных данных, поэтому это одно и то же задание и одна покупка.
-- Переключение между готовыми вариантами бесплатно.
-- Технический сбой:
-  - неудачное превью возвращает бесплатное право или оплату;
-  - неудачное видео можно повторить без оплаты в пределах бюджета попыток;
-  - когда попытки кончаются, оплата возвращается. Автоматических перегенераций нет.
-- Смена фото или образа не удаляет превью: они остаются в истории с пометкой «для прежних фото». Для видео используется только актуальное превью.
+- The page never scrolls; the video stays fixed.
+- Two stable positions. Drag (touch, mouse, pen) on the handle or title area, flick velocity or halfway snapping; wheel/trackpad expands; the handle is a button (Enter/Space toggles, ↑ expands, ↓ collapses, Esc collapses).
+- Expanded: only the content scrolls. Dragging down from the content collapses only if the content is already at its top *and* the gesture started there; a wheel gesture that scrolls up to the top while reading does not collapse — a new gesture is needed.
+- Phones: the sheet slides (transform), safe areas respected, height follows the visual viewport. Desktop: a width-constrained card (600 px) above the bottom edge that grows in height.
+- Creation steps use the same widget, capped at ~72% of a phone screen so the video stays visible; the primary action is pinned at the bottom of the widget.
 
-Платежи не подключены. Все покупки — тестовые (`purchases.status = test_paid | refunded`), и интерфейс это прямо говорит.
+### Creation flow (all inside the widget, state in the URL: `?d=draft&s=step&j=job`)
 
-## Два пути к видео
+1. **Participants** — round thumbnails at the top: the original faces, replaced by the uploaded person, a ring on the active one, a tick on completed ones, `aria-current="step"`, no "Step 1 of 2". The video behind re-centres on the participant and dims everything else.
+   Each step: who you're replacing (cutout + description), upload 1–3 photos or pick a saved person, then outfit (compact dropdown) and a discreet **Adjust appearance** (presentation chips + a correction note). One **Continue**. A small line explains that saved people stay in this browser, with a compact switch to opt out.
+2. **Review** — who replaces whom, **Create video** and **Preview image first** (marked Free or Paid).
+3. **Preview** (optional) — one shared image with everyone. Versions, approve one, regenerate, or edit. A change to a person or outfit marks previews "Earlier settings"; the server refuses to animate an outdated preview.
+4. **Generation** — the video dims, a slow glow runs along the screen edge (paused in hidden tabs, static under reduced motion). Stages: Preparing → Generating → Adding the original sound → Ready / Failed / Under review. No percentages (providers don't report them). Reloading restores the state.
+5. **Result** — the actual result plays as the background; Download, Share, Make another. Demo output is labelled as original footage.
 
-- **С превью.** Выбранное актуальное общее изображение, фото участников, роли и образы.
-- **Сразу видео.** Фото участников, роли, образы и исходный ролик. Скрытой платной картинки нет.
+Prices appear only in the confirmation dialog before a paid action, with what is bought (one preview or one video), the billing country and "Test mode — no money is charged".
 
-Пропускать ли превью, решает возможность провайдера (`planVideoInputs`):
+## Whole-person replacement
 
-| Провайдер | Без превью |
-|---|---|
-| Демо | поддерживается |
-| Genjutsu (Higgsfield) | поддерживается: принимает до 8 изображений |
-| Kling Motion Control | только мемы на одного человека: API принимает одно изображение персонажа. Для Hotel Lobby кнопка «Сразу видео» будет недоступна с короткой причиной; обходного пути нет |
+- Stored separately per participant (`src/lib/domain/types.ts`): the original **role** (from config), the **reference photos**, **user-confirmed appearance preferences** (`mode: photos | adjusted`, optional presentation, optional description), the **outfit choice**, and the **preset constraints** that travel with an outfit.
+- `buildSpec()` turns that into a structured `GenerationSpec`; `render*Prompt()` fills the meme's server-side prompt templates. Prompts never reach the browser.
+- The replacement scope comes from provider capabilities (`replaces: "whole-person" | "face-only"`). A face-only model is never asked to change body, hair or clothes, and the review step says so before payment.
+- Presentation is never inferred. Photo analysis (`src/lib/providers/analysis/`) checks only resolution, exposure, sharpness and — with the Gemini checker — face count and body visibility. Without a full-body reference the prompt says not to invent proportions, and the UI offers an optional full-length photo.
+- Random outfit: drawn once on the server and stored (`resolvedPresetId`); preview and video use the same draw; it changes only with **Draw again**.
+- Original audio: the worker attaches the meme's own track with exact bounds via FFmpeg; video prompts tell the model not to generate music.
+- If the user skips the preview and the video model needs one prepared image (Kling Motion Control with two people), the worker first makes an **internal reference frame** with the image model — not shown, not charged separately.
 
-Перед запуском фиксируются входные данные (копии файлов в папку задания), промпт, версия шаблона и цена.
+## Adapters (UI never knows the provider)
 
-## Оригинальный звук
+| Concern | Adapters | Selected by |
+|---|---|---|
+| Photo analysis | `local` (pixel checks), `gemini` (prepared) | `PHOTO_ANALYZER` |
+| Image | `demo` (labelled collage), `gemini` (prepared) | `IMAGE_PROVIDER` + key |
+| Video | `demo`, `kling`, `genjutsu` (prepared) | `VIDEO_PROVIDER` + keys |
+| Payments | `test` only | `PAYMENT_PROVIDER` (server-side) |
 
-- Аудио хранится в шаблоне с точными границами.
-- Обработчик накладывает его через FFmpeg и проверяет результат через ffprobe: звук есть, длительность совпадает. Картинка при этом перекодируется, чтобы обрезка была точной.
-- Песню никогда не ускоряем и не замедляем. Большое расхождение длительности → статус «проверяем вручную».
-- Из готового ролика сохраняется кадр-постер.
+Prices are per currency in `src/lib/commerce/prices.ts` (example prices; one purchase = one preview or one video, no tokens). The **billing country** is an explicit choice (purchase dialog) → edge geo header → `DEFAULT_BILLING_COUNTRY`; the checkout currency follows the country. Interface locale, meme market, billing country and currency are four separate values — a Russian interface with US billing pays in dollars. The server accepts a purchase only when the client echoes the exact quoted amount **and** currency; purchases are idempotent; failures refund.
 
-## Шаблоны
+## Localization
 
-Каталог — `TEMPLATES` в `src/lib/templates/index.ts`: сейчас только Hotel Lobby на реальном видео. У каждой роли — стабильный id, область на опорном кадре и вырезка (`cutout: { src, atSec }`), которые готовятся один раз при импорте видео, а не при каждом заказе. Образы задаются в шаблоне: «Из видео», «С фото» и скрытые под «Ещё» «Костюм», «Халат».
+- English is the source locale. Interface strings: `src/i18n/messages/en.ts`; translations are separate files of the same shape (`ru.ts`) — TypeScript and a unit test check completeness. Plural forms use `Intl.PluralRules` categories.
+- Prepared locales: `en`, `ru`, `pt-BR`, `pt-PT`, `es`, `ja` (`src/i18n/locales.ts`). Only **published** locales with a dictionary are routed; a meme page additionally needs that meme's translation marked `review.status: "reviewed"`. Today: English and Russian.
+- Separate URLs per translation (`/en/memes/hotel-lobby`, `/ru/memes/hotel-lobby`), `<html lang>` per locale, self-referencing canonicals, reciprocal `hreflang` + `x-default`, a localized sitemap with alternates, Open Graph/Twitter metadata, JSON-LD (`VideoObject` + `FAQPage`) that matches the visible content.
+- The selector shows language names, not flags, and keeps the query, so the draft and step survive a switch. A browser language with an available translation produces a small suggestion; it never redirects.
 
-Нарисованные шаблоны на 1 и 3 участника (`EXAMPLE_TEMPLATES`) в каталог не выводятся — они остались только для проверки, что поддерживается любое число ролей.
+## Add a meme
 
-## Интерфейс
+1. Create `src/memes/<id>/index.ts` exporting a `MemeDef` (see `src/memes/types.ts`): stable id, version, default locale, markets, media paths, focal points, roles (region, face crop, cutout, focal point, allowed outfits, server prompt), outfits (presets, random pool, constraints), photo limits, prompt templates, sources.
+2. Add `content.en.ts` (slug, title, tagline, SEO, role and outfit labels, editorial sections with source ids, FAQ, `review`).
+3. Register it in `MEMES` in `src/memes/index.ts`.
+4. Prepare media (adapt `scripts/import-video.ts`: fragment bounds, reference frame time, face regions).
+5. `npm test` checks the config (regions, outfit ids, labels in every translation, sources). Pages, sitemap and metadata pick it up.
 
-rapui на этой итерации не используется: декоративная анимация мешала последовательности действий. Вместо неё — несколько собственных компонентов в `src/ui/` (кнопка, диалог на Radix, поле, сегменты, индикатор) поверх Tailwind-токенов в `globals.css`. Наведение меняет только фон или рамку; текст кнопок неподвижен; фокус с клавиатуры заметен; `prefers-reduced-motion` отключает переходы. Кнопки 40 px на десктопе, 48 px для главного действия на телефоне.
+## Add a translation
 
-## Supabase (реальный режим)
+- **Interface:** copy `src/i18n/messages/en.ts` to `<locale>.ts`, translate, register it in `src/i18n/index.ts`, and set the locale's `status: "published"` in `src/i18n/locales.ts` once reviewed.
+- **A meme:** add `content.<locale>.ts` next to the meme (its own slug if wanted) and add it to `content`; set `review.status: "reviewed"` after review. Until then it is not routed, not in the sitemap and not in hreflang.
 
-1. Примените `supabase/migrations/0001_init.sql` и `0002_single_preview_and_purchases.sql`.
-2. Включите Anonymous sign-ins.
-3. Выполните `npm run seed:templates`.
-4. Заполните `.env.local` по `.env.example`.
+## Real vs simulated
 
-## Telegram
+**Works for real:** the Hotel Lobby video, cutouts and face crops; landing pages, sheet, flow, i18n, SEO output; uploads with validation and pixel checks; saved people; drafts with optimistic versioning; outfit/appearance storage; preview invalidation; idempotent purchases (test adapter), refunds, job leasing/retries; assembly of the result with the original audio (verified with ffprobe).
 
-Общий конструктор. Тема всегда тёмная; безопасные отступы и кнопка «Назад» работают внутри Telegram. Сервер проверяет initData через HMAC. Без токена бота вход не работает, с настоящим ботом не проверялся.
+**Simulated (demo adapters):** image and video generation (labelled placeholders), payments (test adapter), face/body photo checks (not run without the Gemini checker).
 
-## Что проверено
+**Not verified:** real Gemini, Kling and Genjutsu calls; the Gemini photo checker; Supabase against a live project (migration `0003` adds photo analysis and billing country); Telegram with a real bot.
 
-### На реальном видео Hotel Lobby, демо-генерациях
+**Editorial facts** were checked against search-result excerpts of the cited sources (Wikipedia, Know Your Meme, The Source, the COLORS upload); the full pages could not be opened from the build environment. Re-read the sources before launch. The Russian translation was written by the developer — review it before launch.
 
-- `next build`, `tsc` — без ошибок; модульные тесты 12/12.
-- Сквозной e2e по HTTP 16/16: оба пути к видео, возобновление черновика, «Не сохранять», «Мои люди», отсутствие генераций по отдельному участнику, потеря актуальности превью, платное повторное превью и бесплатный выбор прежнего варианта, никаких двойных покупок и заданий, возвраты при сбоях, изоляция пользователей. Результат — **10,00 с с оригинальной дорожкой клипа** (ffprobe).
-- Playwright (Chromium), десктоп 1440×900 и iPhone 13:
-  - реальное видео → человек 1 → человек 2 → сразу видео;
-  - реальное видео → человек 1 → человек 2 → фото-превью → ещё вариант → выбор первого → видео;
-  - текущий участник отмечен `aria-current="step"`, текстового счётчика нет;
-  - «назад» сохраняет загруженные фото;
-  - цены нет в каталоге, на экране мема и на шагах людей — она появляется только в окне подтверждения;
-  - при наведении у кнопки не меняются размер, положение и текст (transform: none, меняется только фон);
-  - ошибок в консоли нет.
+## Verified
 
-### Реальными вызовами — не проверено
-
-- Gemini, Kling и Genjutsu: адаптеры написаны по документации (частично по выдержкам), реальных вызовов не было.
-- Supabase: не применялся к живому проекту.
-- Telegram-вход: не проверялся с настоящим ботом.
-- Звук в ответе настоящего видеосервиса: не проверялся (сборка с оригинальной дорожкой проверена на демо-ролике из реального клипа).
+- `tsc`, `next build`; unit tests (draft logic, random outfit, prompts and scope, provider planning, i18n completeness and hreflang, billing/currency, original-audio assembly, Telegram signatures).
+- HTTP e2e (18 checks): SEO output, both video paths, 1–3 photos, analysis stored, random outfit stability, invalidation by photo and outfit, paid repeat preview with amount+currency confirmation, billing country independent of language, duplicate clicks → one job/purchase, failures with refunds, ownership isolation, 10.00 s result with original audio.
+- Playwright on iPhone 13 and 1440×900 (61 checks): sheet drag/snap with real touch events, scroll hand-off, wheel, keyboard, reduced motion, hearts paused in hidden tabs, rail navigation and thumbnails, upload validation, saved people and opt-out, outfit dropdown and random persistence, invalidation, language switch without draft loss, both paths, double-click Pay → one job, reload during generation, failure with free retry and preserved photos, focus ring, hover without movement, no console errors.

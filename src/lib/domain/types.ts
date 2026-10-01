@@ -2,7 +2,6 @@
  * Domain entities shared by the API, the repositories (local SQLite for the demo,
  * Supabase for real use), the worker and — as JSON — the browser.
  */
-import type { ClothingMode } from "../templates/types";
 
 export type ID = string;
 
@@ -29,6 +28,18 @@ export interface Person {
   updatedAt: string;
 }
 
+export interface PhotoAnalysis {
+  analyzer: string;
+  isDemo: boolean;
+  /** which checks actually ran; anything else is unknown, not "fine" */
+  checked: ("resolution" | "exposure" | "sharpness" | "faces" | "body")[];
+  issues: ("small" | "dark" | "bright" | "blurry" | "no_face" | "several_faces")[];
+  /** null → not checked */
+  faces: number | null;
+  /** how much of the person is visible; null → not checked */
+  body: "full" | "upper" | "face" | null;
+}
+
 export interface Photo {
   id: ID;
   userId: ID;
@@ -38,14 +49,35 @@ export interface Photo {
   width: number;
   height: number;
   bytes: number;
+  /** result of the photo-analysis adapter (quality, faces, body visibility) — never identity or gender */
+  analysis?: PhotoAnalysis;
   createdAt: string;
+}
+
+/** How the clothes are chosen for one participant. `optionId` refers to MemeDef.outfits. */
+export interface OutfitChoice {
+  optionId: string;
+  /** random only: the preset drawn once and stored, so preview and video agree */
+  resolvedPresetId?: string;
+  /** custom only: the user's short description (data, never instructions) */
+  text?: string;
+}
+
+/** Presentation is only ever what the user says — never inferred from a photo. */
+export type Presentation = "feminine" | "masculine" | "neutral";
+
+export interface AppearancePrefs {
+  /** "photos": appearance from photos (default); "adjusted": the user confirmed preferences below */
+  mode: "photos" | "adjusted";
+  presentation?: Presentation;
+  /** user correction of the description ("curly hair, shorter beard") */
+  description?: string;
 }
 
 /** Per-order look of one person in one role. Separate from the person's photos. */
 export interface LookSettings {
-  clothing: ClothingMode;
-  presetId?: string;
-  glasses?: "as-photo" | "remove";
+  outfit: OutfitChoice;
+  appearance: AppearancePrefs;
 }
 
 export interface Assignment {
@@ -93,7 +125,7 @@ export interface Preview {
   isDemo: boolean;
   storageKey?: string;
   error?: string;
-  /** ordinal inside (draft, kind, role) — «вариант 3» */
+  /** ordinal inside (draft, kind, role) — "version 3" */
   seq: number;
   /** false → came from the free offer; true → a (test) purchase */
   paid?: boolean;
@@ -110,8 +142,33 @@ export type JobStatus =
   | "failed"
   | "needs_review"; // duration mismatch etc. — a human decides
 
-/** Frozen inputs of a job: later draft edits never touch a started generation. */
 export type VideoMode = "preview" | "direct";
+
+export type ReplacementScope = "whole-person" | "face-only";
+
+/**
+ * Structured generation request — built from stored data, rendered into
+ * provider prompts on the server. Each part is kept separately: the original
+ * role, the reference photos, the user-confirmed appearance preferences,
+ * the outfit and the preset constraints.
+ */
+export interface GenerationSpec {
+  memeId: string;
+  memeVersion: number;
+  promptVersion: string;
+  scope: ReplacementScope;
+  participants: {
+    roleId: string;
+    /** server-side description of the original performer in the scene */
+    role: string;
+    referencePhotoCount: number;
+    /** what the photos are known to show; "unknown" when no analyzer checked */
+    bodyReference: "full" | "partial" | "unknown";
+    appearance: AppearancePrefs;
+    outfit: { optionId: string; kind: string; presetId?: string; prompt: string | null; text?: string };
+    constraints: string[];
+  }[];
+}
 
 export interface Money {
   amountMinor: number;
@@ -130,7 +187,16 @@ export interface JobInput {
   negativePrompt?: string;
   durationSec: number;
   aspectRatio: string;
-  /** only in "preview" mode: frozen copy of the chosen scene image */
+  /** structured inputs the prompt was rendered from (kept for audit and re-rendering) */
+  spec: GenerationSpec;
+  /** what the model is able to replace — decided by provider capabilities at launch */
+  scope: ReplacementScope;
+  /**
+   * "direct" mode with a provider that needs an image: the worker first
+   * prepares an internal reference frame (not shown, not charged separately)
+   */
+  internalFrame?: boolean;
+  /** only in "preview" mode (or after the internal frame): frozen copy of the scene image */
   sceneImageKey?: string;
   scenePreviewId?: ID;
   /** fingerprint of every draft input at launch */
@@ -208,8 +274,11 @@ export interface Order {
   amountMinor: number | null;
   currency: string;
   priceIsExample: boolean;
-  status: "test_paid" | "refunded";
-  method: "test";
+  status: "test_paid" | "paid" | "refunded";
+  /** payment adapter that handled it ("test" until a real one is connected) */
+  method: string;
+  /** country the customer is billed in — never derived from the interface language */
+  billingCountry?: string;
   createdAt: string;
   refundedAt?: string;
 }

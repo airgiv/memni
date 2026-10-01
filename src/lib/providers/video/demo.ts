@@ -3,7 +3,7 @@
  * the task id (so it survives worker restarts); the "result" is the template's
  * own demo motion clip with the chosen scene image (or, without a preview, the
  * people's photos) pinned in a corner and a
- * «ДЕМО-РОЛИК · не ваш результат» badge — then the worker muxes the original
+ * "DEMO · placeholder, not your result" badge — then the worker muxes the original
  * audio exactly as it would for a real result.
  */
 import { join } from "node:path";
@@ -37,6 +37,8 @@ export class DemoVideoProvider implements VideoProvider {
     maxReferenceImages: 8,
     needsPublicUrls: false,
     maxDurationSec: 30,
+    // simulated: the demo replaces nobody, it only pins photos in a corner
+    replaces: "whole-person" as const,
   };
 
   async submit(req: VideoSubmitRequest) {
@@ -48,7 +50,7 @@ export class DemoVideoProvider implements VideoProvider {
     const elapsed = Date.now() - Number(ts);
     if (elapsed < QUEUE_MS) return { state: "queued" };
     if (elapsed < QUEUE_MS + RUN_MS) return { state: "running" };
-    if (mode === "fail") return { state: "failed", error: "Демо: имитация ошибки на стороне видеосервиса" };
+    if (mode === "fail") return { state: "failed", error: "Demo: simulated video service failure" };
     return { state: "succeeded", videoUrl: "demo" };
   }
 

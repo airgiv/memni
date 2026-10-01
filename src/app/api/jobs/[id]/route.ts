@@ -12,7 +12,7 @@ export const GET = handle(async (_req: Request, ctx: RouteCtx<P>) => {
   const userId = await requireUserId();
   const repo = getRepo();
   const job = await repo.getJob(userId, id);
-  if (!job) throw new UserError("not_found", "Видео не найдено", 404);
+  if (!job) throw new UserError("not_found", "Video not found", 404);
   const order = await repo.getOrderForRef(userId, id);
   return json({ job: publicJob(job), order: order && { amountMinor: order.amountMinor, currency: order.currency, priceIsExample: order.priceIsExample, status: order.status } });
 });

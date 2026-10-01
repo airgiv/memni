@@ -93,7 +93,7 @@ export class LocalRepo implements Repo {
   async deletePerson(userId: string, id: string) {
     return this.tx(() => {
       const person = this.one<Person>("SELECT data FROM people WHERE id = ? AND user_id = ?", id, userId);
-      if (!person) throw new NotFoundError("Человек не найден");
+      if (!person) throw new NotFoundError("Person not found");
       const photos = this.many<Photo>("SELECT data FROM photos WHERE person_id = ? AND user_id = ?", id, userId);
       const previews = this.many<Preview>("SELECT data FROM previews WHERE user_id = ?", userId).filter(
         (p) => p.personId === id || (p.kind === "scene" && this.sceneIncludes(p, id)),
@@ -185,7 +185,7 @@ export class LocalRepo implements Repo {
           if (prev) return { preview: prev, reused: true };
         }
       } else if (opts.freeLimit !== undefined) {
-        if (this.freeUsed(p.userId) >= opts.freeLimit) throw new LimitError("preview_limit", "Бесплатное превью уже использовано");
+        if (this.freeUsed(p.userId) >= opts.freeLimit) throw new LimitError("preview_limit", "The free preview has been used");
       }
       const seqRow = this.db
         .prepare(
@@ -257,18 +257,18 @@ export class LocalRepo implements Repo {
         .prepare(`SELECT COUNT(*) AS n FROM jobs WHERE user_id = ? AND status IN (${marks})`)
         .get(job.userId, ...ACTIVE_JOB_STATUSES) as { n: number };
       if (Number(mine.n) >= limits.perUser)
-        throw new LimitError("active_jobs", "Предыдущее видео ещё создаётся — дождитесь его, чтобы начать новое");
+        throw new LimitError("active_jobs", "Your previous video is still being made — wait for it before starting a new one");
       const all = this.db
         .prepare(`SELECT COUNT(*) AS n FROM jobs WHERE status IN (${marks})`)
         .get(...ACTIVE_JOB_STATUSES) as { n: number };
       if (Number(all.n) >= limits.global)
-        throw new LimitError("global_jobs", "Сейчас создаётся много видео. Попробуйте через несколько минут");
+        throw new LimitError("global_jobs", "Many videos are being made right now. Try again in a few minutes");
       const since = new Date(Date.now() - 24 * 3600_000).toISOString();
       const today = this.db
         .prepare("SELECT COUNT(*) AS n FROM jobs WHERE user_id = ? AND created_at > ?")
         .get(job.userId, since) as { n: number };
       if (Number(today.n) >= limits.perDay)
-        throw new LimitError("daily_jobs", "На сегодня лимит видео исчерпан");
+        throw new LimitError("daily_jobs", "You have reached today's video limit");
       this.insertJob(job);
       return { job, created: true };
     });
@@ -330,8 +330,8 @@ export class LocalRepo implements Repo {
   async updateJob(id: string, patch: Partial<Job>, lockedBy?: string) {
     return this.tx(() => {
       const cur = this.one<Job>("SELECT data FROM jobs WHERE id = ?", id);
-      if (!cur) throw new NotFoundError("Задание не найдено");
-      if (lockedBy && cur.lockedBy !== lockedBy) throw new ConflictError("Задание обрабатывает другой обработчик");
+      if (!cur) throw new NotFoundError("Job not found");
+      if (lockedBy && cur.lockedBy !== lockedBy) throw new ConflictError("Another worker holds this job");
       const next: Job = { ...cur, ...patch, id: cur.id, userId: cur.userId, updatedAt: new Date().toISOString() };
       this.writeJob(next);
       return next;
@@ -344,7 +344,7 @@ export class LocalRepo implements Repo {
     const j = await this.getJob(userId, id);
     if (!j) throw new NotFoundError();
     if ((ACTIVE_JOB_STATUSES as readonly string[]).includes(j.status))
-      throw new ConflictError("Видео ещё создаётся — удалить можно после завершения");
+      throw new ConflictError("The video is still being made — delete it when it is done");
     this.run("DELETE FROM jobs WHERE id = ? AND user_id = ?", id, userId);
     return [j.resultKey, j.rawResultKey].filter((k): k is string => Boolean(k));
   }
@@ -377,7 +377,7 @@ export class LocalRepo implements Repo {
     return this.one<Order>("SELECT data FROM purchases WHERE ref_id = ? AND user_id = ?", refId, userId);
   }
   async refundOrderForRef(refId: string) {
-    const rows = this.db.prepare("SELECT id, data FROM purchases WHERE ref_id = ? AND status = 'test_paid'").all(refId) as { id: string; data: string }[];
+    const rows = this.db.prepare("SELECT id, data FROM purchases WHERE ref_id = ? AND status IN ('test_paid', 'paid')").all(refId) as { id: string; data: string }[];
     for (const r of rows)
       this.run(
         "UPDATE purchases SET status = 'refunded', data = ? WHERE id = ?",

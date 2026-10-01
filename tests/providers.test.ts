@@ -2,8 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import { klingJwt } from "../src/lib/providers/video/kling";
-import { planVideoInputs } from "../src/lib/providers/video/types";
-import { getTemplate, EXAMPLE_TEMPLATES } from "../src/lib/templates";
+import { planVideoInputs, replacementScope, type VideoCapabilities } from "../src/lib/providers/video/types";
+import { hotel, withRoles } from "./fixtures";
 
 test("Kling JWT: HS256 with iss/exp/nbf, verifiable with the secret", () => {
   const jwt = klingJwt("AK", "SK", 1_000_000);
@@ -13,15 +13,20 @@ test("Kling JWT: HS256 with iss/exp/nbf, verifiable with the secret", () => {
   assert.equal(createHmac("sha256", "SK").update(`${h}.${p}`).digest("base64url"), s);
 });
 
-test("both video paths are checked against what the provider supports", () => {
-  const t2 = getTemplate("hotel-lobby")!;
-  const t1 = EXAMPLE_TEMPLATES.find((x) => x.roles.length === 1)!;
-  const kling = { motionReference: true, imageReference: true, perPersonReferences: false, withoutPreview: "single-person" as const, maxReferenceImages: 1, needsPublicUrls: true, maxDurationSec: 30 };
-  assert.equal(planVideoInputs(t2, kling, "preview").ok, true);
-  const direct2 = planVideoInputs(t2, kling, "direct");
-  assert.equal(direct2.ok, false, "one character image cannot carry two people without a prepared picture");
-  assert.match(direct2.problem!, /без превью/);
-  assert.equal(planVideoInputs(t1, kling, "direct").ok, true, "one-person meme: the photo is the character image");
-  assert.equal(planVideoInputs(t2, { ...kling, withoutPreview: "any" }, "direct").ok, true);
-  assert.equal(planVideoInputs(t2, { ...kling, motionReference: false }, "preview").ok, false);
+test("both video paths are planned against what the provider supports", () => {
+  const kling: VideoCapabilities = { motionReference: true, imageReference: true, perPersonReferences: false, withoutPreview: "single-person", maxReferenceImages: 1, needsPublicUrls: true, maxDurationSec: 30, replaces: "whole-person" };
+  const frameMaker = { scene: () => undefined };
+  assert.deepEqual(planVideoInputs(hotel, kling, "preview"), { ok: true });
+  // two people, one character image: the backend prepares an internal reference frame
+  assert.deepEqual(planVideoInputs(hotel, kling, "direct", frameMaker), { ok: true, internalFrame: true });
+  assert.deepEqual(planVideoInputs(hotel, kling, "direct"), { ok: false, problem: "no_direct" }, "no image model → reported, not faked");
+  assert.deepEqual(planVideoInputs(withRoles(1), kling, "direct", frameMaker), { ok: true }, "one-person meme: the photo is the character image");
+  assert.deepEqual(planVideoInputs(hotel, { ...kling, withoutPreview: "any" }, "direct", frameMaker), { ok: true });
+  assert.deepEqual(planVideoInputs(hotel, { ...kling, motionReference: false }, "preview"), { ok: false, problem: "no_motion" });
+});
+
+test("replacement scope is the weakest link of the chain", () => {
+  assert.equal(replacementScope({ replaces: "whole-person" }, { replaces: "whole-person" }), "whole-person");
+  assert.equal(replacementScope({ replaces: "face-only" }, { replaces: "whole-person" }), "face-only");
+  assert.equal(replacementScope({ replaces: "whole-person" }, { replaces: "face-only" }), "face-only");
 });

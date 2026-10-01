@@ -65,8 +65,8 @@ export class DurationMismatchError extends Error {
     public audioSec: number,
   ) {
     super(
-      `Длительность видео (${videoSec.toFixed(2)} с) заметно отличается от оригинального звука (${audioSec.toFixed(2)} с). ` +
-        "Мы не подгоняем песню ускорением или замедлением — нужна ручная проверка.",
+      `The video (${videoSec.toFixed(2)} s) differs noticeably from the original audio (${audioSec.toFixed(2)} s). ` +
+        "We never speed up or slow down the song — a person needs to check.",
     );
   }
 }
@@ -90,7 +90,7 @@ export async function assembleWithOriginalAudio(opts: {
 }): Promise<AssembleResult> {
   const target = opts.audioEndSec - opts.audioStartSec;
   const raw = await probe(opts.videoFile);
-  if (!raw.hasVideo) throw new AssemblyCheckError("В ответе видеосервиса нет видеодорожки");
+  if (!raw.hasVideo) throw new AssemblyCheckError("The video service returned no video track");
   const videoSec = raw.videoDurationSec ?? raw.durationSec;
   const diff = videoSec - target;
   if (Math.abs(diff) > opts.toleranceSec) throw new DurationMismatchError(videoSec, target);
@@ -108,9 +108,9 @@ export async function assembleWithOriginalAudio(opts: {
   ]);
 
   const out = await probe(opts.outFile);
-  if (!out.hasAudio) throw new AssemblyCheckError("В собранном ролике нет звука");
+  if (!out.hasAudio) throw new AssemblyCheckError("The assembled video has no audio");
   if (Math.abs(out.durationSec - target) > 0.15)
-    throw new AssemblyCheckError(`Собранный ролик длится ${out.durationSec.toFixed(2)} с вместо ${target.toFixed(2)} с`);
+    throw new AssemblyCheckError(`The assembled video is ${out.durationSec.toFixed(2)} s instead of ${target.toFixed(2)} s`);
   return {
     durationSec: out.durationSec,
     hasAudio: out.hasAudio,

@@ -2,7 +2,7 @@
  * One step of the video pipeline for one leased job. The worker loop
  * (worker/index.ts) claims a job, calls `step`, and repeats.
  *
- *   queued ──submit──▶ generating ──poll──▶ assembling ──ffmpeg──▶ ready
+ *   queued ─(internal frame)─submit──▶ generating ──poll──▶ assembling ──ffmpeg──▶ ready
  *      │                   │                    │
  *      └── rejected ──▶ failed ◀── provider failed      └─ duration mismatch ─▶ needs_review
  *
@@ -20,11 +20,15 @@ import { join } from "node:path";
 import { getConfig } from "../../config";
 import type { Job } from "../../domain/types";
 import { videoProviderFor, VideoProviderError, type VideoProvider, type VideoStatus } from "../../providers/video";
-import { getTemplate } from "../../templates";
+import { getMeme } from "../../../memes";
+import { renderScenePrompt } from "../../domain/prompts";
+import { getImageProvider, ImageProviderError } from "../../providers/image";
+import { referenceFrame, readRef } from "./previews";
 import { assembleWithOriginalAudio, AssemblyCheckError, DurationMismatchError, runFfmpeg } from "../media";
 import { getRepo } from "../repo";
 import { getStorage, keys } from "../storage";
 import { isTerminalFailure } from "./jobs";
+import { refundFor } from "../pricing";
 
 const MAX_GENERATION_MS = 2 * 60 * 60 * 1000;
 
@@ -42,7 +46,7 @@ function publicUrl(src: string): string | undefined {
 export async function step(job: Job, workerId: string): Promise<Job> {
   const after = await stepInner(job, workerId);
   // a failure the user cannot retry: the (test) payment goes back
-  if (isTerminalFailure(after)) await getRepo().refundOrderForRef(after.id);
+  if (isTerminalFailure(after)) await refundFor(after.id);
   return after;
 }
 
@@ -62,7 +66,7 @@ async function stepInner(job: Job, workerId: string): Promise<Job> {
       case "generating": {
         if (!job.providerTaskId) return await recoverSubmit(job, provider, save);
         if (Date.now() - new Date(job.updatedAt).getTime() > MAX_GENERATION_MS && Date.now() - new Date(job.createdAt).getTime() > MAX_GENERATION_MS)
-          return await save({ status: "needs_review", error: "Видеосервис слишком долго не отвечает — проверим вручную", errorCode: "stuck", ...release });
+          return await save({ status: "needs_review", error: "The video service has not answered for too long — a person will check", errorCode: "stuck", ...release });
         const st = await provider.status(job.providerTaskId);
         return await onStatus(job, st, provider, save);
       }
@@ -79,8 +83,8 @@ async function stepInner(job: Job, workerId: string): Promise<Job> {
     console.error(`[worker] job ${job.id} failed`, e);
     return await save({
       status: "failed",
-      error: e instanceof Error ? e.message : "Неизвестная ошибка",
-      errorCode: e instanceof VideoProviderError ? e.code : "internal",
+      error: e instanceof Error ? e.message : "Unknown error",
+      errorCode: e instanceof VideoProviderError ? e.code : e instanceof ImageProviderError && e.code === "safety" ? "rejected_input" : "internal",
       finishedAt: new Date().toISOString(),
       ...release,
     });
@@ -92,10 +96,25 @@ type Save = (patch: Partial<Job>) => Promise<Job>;
 async function submit(job: Job, provider: VideoProvider, save: Save): Promise<Job> {
   const repo = getRepo();
   if (job.attempts >= job.maxAttempts)
-    return save({ status: "failed", error: "Попытки для этого видео закончились", errorCode: "attempts", lockedBy: undefined, lockedUntil: undefined });
-  const t = getTemplate(job.input.templateId);
+    return save({ status: "failed", error: "No attempts left for this video", errorCode: "attempts", lockedBy: undefined, lockedUntil: undefined });
+  const t = getMeme(job.input.templateId);
   const attempt = job.attempts + 1;
   const externalId = `${job.id}-a${attempt}`;
+  // 0) direct mode with a model that needs one image: prepare the internal reference frame once
+  if (job.input.internalFrame && !job.input.sceneImageKey) {
+    if (!t) return save({ status: "failed", error: "Meme configuration missing", errorCode: "config", lockedBy: undefined, lockedUntil: undefined });
+    const key = `u/${job.userId}/jobs/${job.id}/internal-frame.jpg`;
+    const image = getImageProvider();
+    const out = await image.scene({
+      meme: t,
+      prompt: renderScenePrompt(t, job.input.spec),
+      referenceFrame: await referenceFrame(t),
+      people: await Promise.all(job.input.people.map(async (p) => ({ role: t.roles.find((r) => r.id === p.roleId)!, photos: await Promise.all(p.referenceKeys.map(readRef)) }))),
+      variant: 0,
+    });
+    await getStorage().put(key, out.bytes, out.mime);
+    job = await save({ input: { ...job.input, sceneImageKey: key } });
+  }
   // 1) persist intent first: if we die after the provider accepted, we know what to look for
   job = await save({ status: "submitting", attempts: attempt, providerExternalId: externalId, providerTaskId: undefined });
 
@@ -113,7 +132,7 @@ async function submit(job: Job, provider: VideoProvider, save: Save): Promise<Jo
     if (missing)
       return save({
         status: "failed",
-        error: "Видеосервису нужны публичные ссылки на файлы: подключите Supabase Storage и задайте TEMPLATE_MEDIA_BASE_URL",
+        error: "The video service needs public file URLs: connect Supabase Storage and set TEMPLATE_MEDIA_BASE_URL",
         errorCode: "config",
         attempts: attempt - 1,
         lockedBy: undefined,
@@ -129,11 +148,12 @@ async function submit(job: Job, provider: VideoProvider, save: Save): Promise<Jo
       negativePrompt: job.input.negativePrompt,
       durationSec: job.input.durationSec,
       aspectRatio: job.input.aspectRatio,
-      mode: job.input.mode,
+      // an internal reference frame makes a direct job image-driven, like the preview path
+      mode: job.input.sceneImageKey ? "preview" : job.input.mode,
       sceneImageUrl,
       sourceVideoUrl,
       peopleImageUrls,
-      characterOrientation: t?.provider.klingCharacterOrientation,
+      characterOrientation: t?.generation.klingCharacterOrientation,
       callbackUrl: process.env.VIDEO_WEBHOOK_URL,
       demoFail: job.input.demoFail,
     });
@@ -172,7 +192,7 @@ async function recoverSubmit(job: Job, provider: VideoProvider, save: Save): Pro
   }
   return save({
     status: "needs_review",
-    error: "Не удалось понять, принял ли видеосервис задание. Чтобы не заплатить дважды, повторная отправка остановлена до ручной проверки",
+    error: "Could not tell whether the video service accepted the task. To avoid paying twice, resubmission is stopped until a person checks",
     errorCode: "unknown_submit",
     lockedBy: undefined,
     lockedUntil: undefined,
@@ -185,7 +205,7 @@ async function onStatus(job: Job, st: VideoStatus, provider: VideoProvider, save
     case "running":
       return save({ nextPollAt: new Date(Date.now() + pollDelay(job, provider)).toISOString(), lockedBy: undefined, lockedUntil: undefined });
     case "failed":
-      return save({ status: "failed", error: st.error ?? "Видеосервис не смог создать видео", errorCode: "provider_failed", finishedAt: new Date().toISOString(), lockedBy: undefined, lockedUntil: undefined });
+      return save({ status: "failed", error: st.error ?? "The video service could not create the video", errorCode: "provider_failed", finishedAt: new Date().toISOString(), lockedBy: undefined, lockedUntil: undefined });
     case "succeeded": {
       const next = await save({ status: "assembling", actualCost: st.actualCost ?? job.actualCost });
       return assemble(next, provider, save, st);
@@ -196,7 +216,7 @@ async function onStatus(job: Job, st: VideoStatus, provider: VideoProvider, save
 async function localOrDownload(src: string, dir: string, name: string): Promise<string> {
   if (/^https?:\/\//.test(src)) {
     const res = await fetch(src);
-    if (!res.ok) throw new Error(`Не удалось скачать ${src}: HTTP ${res.status}`);
+    if (!res.ok) throw new Error(`Could not download ${src}: HTTP ${res.status}`);
     const p = join(dir, name);
     await writeFile(p, Buffer.from(await res.arrayBuffer()));
     return p;
@@ -208,13 +228,13 @@ async function assemble(job: Job, provider: VideoProvider, save: Save, known?: V
   const repo = getRepo();
   const storage = getStorage();
   const c = getConfig();
-  const dir = await mkdtemp(join(tmpdir(), "memni-job-"));
+  const dir = await mkdtemp(join(tmpdir(), "memme-job-"));
   try {
     // 1) raw result from the provider (kept for audit / manual review)
     let rawKey = job.rawResultKey;
     if (!rawKey || !(await storage.exists(rawKey))) {
       const st = known ?? (job.providerTaskId ? await provider.status(job.providerTaskId) : undefined);
-      if (!st || st.state !== "succeeded") throw new Error("Результат видеосервиса недоступен");
+      if (!st || st.state !== "succeeded") throw new Error("The video service result is not available");
       const bytes = await provider.fetchResult(st, job);
       rawKey = keys.raw(job.userId, job.id, job.attempts);
       await storage.put(rawKey, bytes, "video/mp4");

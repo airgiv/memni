@@ -1,5 +1,5 @@
 {
-  "name": "memni",
+  "name": "memme",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -9,10 +9,10 @@
     "build": "next build",
     "start": "next start",
     "worker": "tsx worker/index.ts",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "next typegen && tsc --noEmit",
     "test": "tsx --test tests/*.test.ts",
-    "media:demo": "tsx scripts/make-demo-media.ts",
-    "seed:templates": "tsx scripts/seed-templates.ts",
+    "media:badges": "tsx scripts/make-badges.ts",
+    "seed:memes": "tsx scripts/seed-memes.ts",
     "e2e": "tsx scripts/e2e.ts",
     "media:import": "tsx scripts/import-video.ts"
   },

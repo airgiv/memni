@@ -13,8 +13,21 @@ export function useMediaQuery(query: string): boolean {
   );
 }
 export const useIsDesktop = () => useMediaQuery("(min-width: 1024px)");
+export const useReducedMotion = () => useMediaQuery("(prefers-reduced-motion: reduce)");
 
-/** Calls `fn` every `ms` while `active`; pauses in background tabs. */
+/** true while the tab is visible — decorative work stops in hidden tabs. */
+export function usePageVisible(): boolean {
+  return useSyncExternalStore(
+    (cb) => {
+      document.addEventListener("visibilitychange", cb);
+      return () => document.removeEventListener("visibilitychange", cb);
+    },
+    () => document.visibilityState === "visible",
+    () => true,
+  );
+}
+
+/** Calls `fn` every `ms` while `active`; pauses in background tabs and catches up when visible again. */
 export function usePolling(fn: () => void, ms: number, active: boolean) {
   const ref = useRef(fn);
   useEffect(() => {
@@ -22,10 +35,15 @@ export function usePolling(fn: () => void, ms: number, active: boolean) {
   });
   useEffect(() => {
     if (!active) return;
-    const id = window.setInterval(() => {
+    const tick = () => {
       if (document.visibilityState === "visible") ref.current();
-    }, ms);
-    return () => window.clearInterval(id);
+    };
+    const id = window.setInterval(tick, ms);
+    document.addEventListener("visibilitychange", tick);
+    return () => {
+      window.clearInterval(id);
+      document.removeEventListener("visibilitychange", tick);
+    };
   }, [ms, active]);
 }
 
@@ -35,7 +53,42 @@ export function useObjectUrl(file: File | null) {
     if (!file) return;
     const u = URL.createObjectURL(file);
     setUrl(u);
-    return () => URL.revokeObjectURL(u);
+    return () => {
+      URL.revokeObjectURL(u);
+      setUrl(null);
+    };
   }, [file]);
   return url;
 }
+
+/** Element size, kept in sync with a ResizeObserver. */
+export function useSize<T extends HTMLElement>() {
+  const ref = useRef<T>(null);
+  const [size, setSize] = useState({ w: 0, h: 0 });
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => setSize({ w: el.clientWidth, h: el.clientHeight }));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  return [ref, size] as const;
+}
+
+/** Safe localStorage access (private windows and blocked storage just return null). */
+export const store = {
+  get(key: string): string | null {
+    try {
+      return window.localStorage.getItem(key);
+    } catch {
+      return null;
+    }
+  },
+  set(key: string, value: string) {
+    try {
+      window.localStorage.setItem(key, value);
+    } catch {
+      /* ignore */
+    }
+  },
+};

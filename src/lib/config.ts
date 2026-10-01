@@ -6,6 +6,8 @@
  *           (SQLite + files under .data/, demo only)
  *  - image: "gemini" when GEMINI_API_KEY is set and IMAGE_PROVIDER != demo
  *  - video: "kling" when KLING_ACCESS_KEY/SECRET are set and VIDEO_PROVIDER != demo
+ *  - photo checks: "gemini" when PHOTO_ANALYZER=gemini and a key is set, else local pixel checks
+ *  - payments: PAYMENT_PROVIDER (only the "test" adapter exists)
  *
  * The UI shows the "demo" badge whenever any generation path is a demo adapter.
  */
@@ -41,6 +43,8 @@ export function getConfig() {
   const geminiKey = str("GEMINI_API_KEY");
   const imageMode: ImageMode = str("IMAGE_PROVIDER") !== "demo" && geminiKey ? "gemini" : "demo";
 
+  const analysisMode: "local" | "gemini" = str("PHOTO_ANALYZER") === "gemini" && geminiKey ? "gemini" : "local";
+
   const klingAk = str("KLING_ACCESS_KEY");
   const klingSk = str("KLING_SECRET_KEY");
   const requestedVideo = str("VIDEO_PROVIDER") ?? "kling";
@@ -56,6 +60,7 @@ export function getConfig() {
     dataMode,
     imageMode,
     videoMode,
+    analysisMode,
     /** true when at least one step would show an example instead of a real generation */
     isDemo: imageMode === "demo" || videoMode === "demo",
     sessionSecret: str("SESSION_SECRET"),
@@ -71,6 +76,8 @@ export function getConfig() {
     gemini: {
       apiKey: geminiKey,
       model: str("GEMINI_IMAGE_MODEL") ?? "gemini-3.1-flash-image",
+      /** text+vision model used by the optional photo checker (PHOTO_ANALYZER=gemini) */
+      analysisModel: str("GEMINI_ANALYSIS_MODEL") ?? "gemini-3.1-flash",
       /** estimated cost of one output image, USD — used for the ledger until the bill is known */
       estimatedCostUsd: num("GEMINI_IMAGE_COST_USD", 0.067),
       timeoutMs: int("GEMINI_TIMEOUT_MS", 90_000),
@@ -115,18 +122,15 @@ export function getConfig() {
     },
 
     payments: {
-      /** payments are never charged in this version; only test orders are created */
-      live: false,
+      /** server-selected payment adapter; only "test" exists — nothing is charged */
+      provider: str("PAYMENT_PROVIDER") ?? "test",
     },
 
     pricing: {
-      currency: str("PRICE_CURRENCY") ?? "RUB",
-      /** price of every preview after the free ones, minor units (4900 = 49 ₽) */
-      previewMinor: int("PREVIEW_PRICE_MINOR", 4900),
-      /** overrides the template's own video price when set */
-      videoMinor: str("VIDEO_PRICE_MINOR") ? int("VIDEO_PRICE_MINOR", 0) : undefined,
-      /** prices are placeholders until cost and seller country are known */
+      /** prices are placeholders until cost and seller countries are known */
       areExamples: str("PRICES_ARE_EXAMPLES") !== "false",
+      /** fallback billing country when the request carries none (ISO 3166-1 alpha-2) */
+      defaultCountry: (str("DEFAULT_BILLING_COUNTRY") ?? "US").toUpperCase(),
     },
   };
 }
@@ -142,7 +146,7 @@ export function publicConfig() {
     videoMode: c.videoMode,
     isDemo: c.isDemo,
     telegramConfigured: Boolean(c.telegram.botToken),
-    paymentsLive: c.payments.live,
+    paymentProvider: c.payments.provider,
   };
 }
 export type PublicConfig = ReturnType<typeof publicConfig>;

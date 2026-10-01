@@ -3,6 +3,7 @@ import { requireUserId } from "@/lib/server/auth";
 import { body, demoFlags, handle, json, type RouteCtx } from "@/lib/server/http";
 import { presentPreview } from "@/lib/server/present";
 import { PriceChangedError, requestScenePreview } from "@/lib/server/services/previews";
+import { requestBilling } from "@/lib/server/billing-request";
 
 /**
  * Starts ONE shared scene preview. Free while the free offer lasts; otherwise
@@ -12,9 +13,15 @@ import { PriceChangedError, requestScenePreview } from "@/lib/server/services/pr
 export const POST = handle(async (req: Request, ctx: RouteCtx<{ id: string }>) => {
   const { id } = await ctx.params;
   const userId = await requireUserId();
-  const b = await body<{ acceptAmountMinor?: number | null; purchaseKey?: string }>(req);
+  const b = await body<{ acceptAmountMinor?: number | null; acceptCurrency?: string | null; purchaseKey?: string }>(req);
   try {
-    const { preview, run } = await requestScenePreview(userId, id, { acceptAmountMinor: b.acceptAmountMinor, purchaseKey: b.purchaseKey }, await demoFlags());
+    const { preview, run } = await requestScenePreview(
+      userId,
+      id,
+      { acceptAmountMinor: b.acceptAmountMinor, acceptCurrency: b.acceptCurrency, purchaseKey: b.purchaseKey },
+      await requestBilling(),
+      await demoFlags(),
+    );
     if (run) after(run);
     return json({ preview: presentPreview(preview, preview.fingerprint), reused: !run }, run ? 202 : 200);
   } catch (e) {

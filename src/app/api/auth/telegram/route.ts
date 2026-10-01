@@ -20,10 +20,10 @@ export const POST = handle(async (req: Request) => {
   if (!res.ok) {
     const msg =
       res.reason === "no_token"
-        ? "Вход через Telegram ещё не настроен на сервере (нет токена бота)"
+        ? "Telegram sign-in is not configured on the server (no bot token)"
         : res.reason === "expired"
-          ? "Данные Telegram устарели — откройте приложение заново"
-          : "Не удалось проверить данные Telegram";
+          ? "Telegram data has expired — reopen the app"
+          : "Could not verify the Telegram data";
     throw new UserError(`telegram_${res.reason}`, msg, res.reason === "no_token" ? 503 : 401);
   }
   const tgId = String(res.user.id);
@@ -40,7 +40,7 @@ export const POST = handle(async (req: Request) => {
   // Supabase: one auth user per Telegram id, signed in server-side via a one-time magic-link token.
   // Prepared and type-checked; not yet exercised against a live project.
   const admin = getSupabaseAdmin();
-  const email = `tg${tgId}@telegram.memni.invalid`;
+  const email = `tg${tgId}@telegram.memme.invalid`;
   let user = await repo.findUserByTelegramId(tgId);
   if (!user) {
     const created = await admin.auth.admin.createUser({ email, email_confirm: true, user_metadata: { telegram_id: tgId, name: displayName } });

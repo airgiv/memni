@@ -7,7 +7,7 @@ import { getStorage, keys } from "@/lib/server/storage";
 
 /**
  * Private files. The id is looked up WITH the caller's user id, so a file of
- * another user is simply «не найдено». Local mode streams the bytes (with
+ * another user is simply "not found". Local mode streams the bytes (with
  * Range support — Safari needs it for video); Supabase mode redirects to a
  * signed URL that lives for one minute.
  */
@@ -17,7 +17,7 @@ export const GET = handle(async (req: Request, ctx: RouteCtx<{ kind: string; id:
   const repo = getRepo();
   let key: string | undefined;
   let type = "image/jpeg";
-  let filename = "memni";
+  let filename = "memme";
   if (kind === "photo") key = (await repo.getPhoto(userId, id))?.storageKey;
   else if (kind === "preview") key = (await repo.getPreview(userId, id))?.storageKey;
   else if (kind === "jobscene") key = (await repo.getJob(userId, id))?.input.sceneImageKey;
@@ -29,9 +29,9 @@ export const GET = handle(async (req: Request, ctx: RouteCtx<{ kind: string; id:
     const job = await repo.getJob(userId, id);
     key = job?.status === "ready" ? job.resultKey : undefined;
     type = "video/mp4";
-    filename = `memni-${job?.input.templateId ?? "video"}-${id.slice(0, 8)}.mp4`;
+    filename = `memme-${job?.input.templateId ?? "video"}-${id.slice(0, 8)}.mp4`;
   }
-  if (!key) throw new UserError("not_found", "Файл не найден", 404);
+  if (!key) throw new UserError("not_found", "File not found", 404);
   const download = new URL(req.url).searchParams.has("download");
 
   if (getConfig().dataMode === "supabase") {

@@ -1,6 +1,6 @@
 /**
  * Demo image adapter. It does NOT generate anything: it pins each person's
- * main photo onto the template frame and stamps «ДЕМО · не генерация» on the
+ * main photo onto the template frame and stamps "DEMO · not generated" on the
  * result, so nobody can mistake it for a personal AI image. It exists to
  * exercise the whole flow — history, stale previews, prices, errors — without
  * paid calls.
@@ -25,13 +25,14 @@ export class DemoImageProvider implements ImageProvider {
   readonly name = "demo";
   readonly isDemo = true;
   readonly maxReferences = 14;
+  readonly replaces = "whole-person" as const;
 
   constructor(private delayMs = 1600) {}
 
   async scene(req: ScenePreviewRequest): Promise<ImageResult> {
     await sleep(this.delayMs + Math.random() * 1200);
-    if (req.demo?.fail) throw new ImageProviderError("demo_failure", "Демо: имитация ошибки генерации");
-    const { w, h } = size(req.template.aspectRatio);
+    if (req.demo?.fail) throw new ImageProviderError("demo_failure", "Demo: simulated generation failure");
+    const { w, h } = size(req.meme.aspectRatio);
     const layers: OverlayOptions[] = [];
     for (const p of req.people) {
       const r = p.role.region;

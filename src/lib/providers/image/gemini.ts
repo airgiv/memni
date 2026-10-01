@@ -13,7 +13,7 @@
  * casing, finish reasons). Model ids and prices were taken from ai.google.dev
  * search excerpts: default model is gemini-3.1-flash-image (gemini-2.5-flash-image
  * is announced for shutdown on 2026-10-02). Up to 14 reference images per call.
- * NOT yet exercised with a real key — see README «Что проверено».
+ * NOT yet exercised with a real key — see README "What was verified".
  */
 import type { AppConfig } from "../../config";
 import { ImageProviderError, type ImageProvider, type ImageRef, type ImageResult, type ScenePreviewRequest } from "./types";
@@ -32,6 +32,8 @@ export class GeminiImageProvider implements ImageProvider {
   readonly name: string;
   readonly isDemo = false;
   readonly maxReferences = 14;
+  // an image model redraws the whole person from the references
+  readonly replaces = "whole-person" as const;
 
   constructor(private cfg: AppConfig["gemini"]) {
     this.name = `gemini:${cfg.model}`;
@@ -42,7 +44,7 @@ export class GeminiImageProvider implements ImageProvider {
   }
 
   private async call(parts: GeminiPart[], aspectRatio: string): Promise<ImageResult> {
-    if (!this.cfg.apiKey) throw new ImageProviderError("config", "GEMINI_API_KEY не задан");
+    if (!this.cfg.apiKey) throw new ImageProviderError("config", "GEMINI_API_KEY is not set");
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), this.cfg.timeoutMs);
     let res: Response;
@@ -57,8 +59,8 @@ export class GeminiImageProvider implements ImageProvider {
         }),
       });
     } catch (e) {
-      if ((e as Error).name === "AbortError") throw new ImageProviderError("timeout", "Сервис изображений не ответил вовремя");
-      throw new ImageProviderError("provider", "Не удалось связаться с сервисом изображений");
+      if ((e as Error).name === "AbortError") throw new ImageProviderError("timeout", "The image service did not answer in time");
+      throw new ImageProviderError("provider", "Could not reach the image service");
     } finally {
       clearTimeout(timer);
     }
@@ -69,16 +71,16 @@ export class GeminiImageProvider implements ImageProvider {
     } | null;
     if (!res.ok) {
       const msg = body?.error?.message ?? `HTTP ${res.status}`;
-      throw new ImageProviderError(res.status === 400 ? "provider" : "provider", `Сервис изображений вернул ошибку: ${msg}`);
+      throw new ImageProviderError(res.status === 400 ? "provider" : "provider", `The image service returned an error: ${msg}`);
     }
     if (body?.promptFeedback?.blockReason)
-      throw new ImageProviderError("safety", "Сервис отказался обрабатывать эти фото по правилам безопасности");
+      throw new ImageProviderError("safety", "The service declined these photos under its safety rules");
     const cand = body?.candidates?.[0];
     const image = cand?.content?.parts?.find((p) => p.inlineData && !p.thought)?.inlineData;
     if (!image) {
       if (cand?.finishReason && SAFETY_REASONS.has(cand.finishReason))
-        throw new ImageProviderError("safety", "Сервис отказался обрабатывать эти фото по правилам безопасности");
-      throw new ImageProviderError("no_image", "Сервис не вернул изображение");
+        throw new ImageProviderError("safety", "The service declined these photos under its safety rules");
+      throw new ImageProviderError("no_image", "The service returned no image");
     }
     return { bytes: Buffer.from(image.data, "base64"), mime: image.mimeType, estimatedCostUsd: this.cfg.estimatedCostUsd };
   }
@@ -92,6 +94,6 @@ export class GeminiImageProvider implements ImageProvider {
         parts.push({ text: `Person #${i + 1}, photo ${j + 1}:` }, this.inline(photo));
       });
     });
-    return this.call(parts, req.template.aspectRatio);
+    return this.call(parts, req.meme.aspectRatio);
   }
 }

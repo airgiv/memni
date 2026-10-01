@@ -18,7 +18,7 @@ export function errorResponse(e: unknown) {
   if (e instanceof LimitError) return json({ error: e.message, code: e.code }, 429);
   if (e instanceof AuthError) return json({ error: e.message, code: "auth" }, 401);
   console.error(e);
-  return json({ error: "Что-то пошло не так на сервере. Попробуйте ещё раз", code: "internal" }, 500);
+  return json({ error: "Something went wrong on the server. Please try again", code: "internal" }, 500);
 }
 
 export function handle<A extends unknown[]>(fn: (...args: A) => Promise<Response>) {
@@ -35,14 +35,16 @@ export async function body<T>(req: Request): Promise<T> {
   try {
     return (await req.json()) as T;
   } catch {
-    throw new UserError("bad_json", "Некорректный запрос");
+    throw new UserError("bad_json", "Invalid request");
   }
 }
+
+export const DEMO_COOKIE = "memme_demo";
 
 /** Demo switches live in a cookie and only ever affect demo adapters. */
 export async function demoFlags(): Promise<DemoFlags> {
   const c = getConfig();
-  const raw = (await cookies()).get("memni_demo")?.value ?? "";
+  const raw = (await cookies()).get(DEMO_COOKIE)?.value ?? "";
   return {
     failPreview: c.imageMode === "demo" && raw.includes("fail-preview"),
     failVideo: c.videoMode === "demo" && raw.includes("fail-video"),
@@ -57,7 +59,16 @@ export function publicPreview(p: Preview) {
 export type PublicPreview = ReturnType<typeof publicPreview>;
 
 export function publicPhoto(p: Photo) {
-  return { id: p.id, personId: p.personId, width: p.width, height: p.height, bytes: p.bytes, createdAt: p.createdAt, url: `/api/files/photo/${p.id}` };
+  return {
+    id: p.id,
+    personId: p.personId,
+    width: p.width,
+    height: p.height,
+    bytes: p.bytes,
+    analysis: p.analysis ? { isDemo: p.analysis.isDemo, checked: p.analysis.checked, issues: p.analysis.issues, faces: p.analysis.faces, body: p.analysis.body } : null,
+    createdAt: p.createdAt,
+    url: `/api/files/photo/${p.id}`,
+  };
 }
 export type PublicPhoto = ReturnType<typeof publicPhoto>;
 

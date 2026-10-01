@@ -102,7 +102,7 @@ export async function requireUserId(): Promise<string> {
   if (!user) {
     const res = await sb.auth.signInAnonymously();
     if (res.error || !res.data.user)
-      throw new AuthError("Не удалось создать гостевую сессию. Включите Anonymous sign-ins в Supabase или войдите через Telegram.");
+      throw new AuthError("Could not create a guest session. Enable Anonymous sign-ins in Supabase or sign in with Telegram.");
     user = res.data.user;
   }
   await repo.ensureUser({ id: user.id, kind: user.is_anonymous ? "anon" : "email", createdAt: user.created_at });

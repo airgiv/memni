@@ -54,6 +54,7 @@ const photoFrom = (r: R): Photo => ({
   width: r.width,
   height: r.height,
   bytes: r.bytes,
+  analysis: undef(r.analysis),
   createdAt: r.created_at,
 });
 const previewFrom = (r: R): Preview => ({
@@ -138,10 +139,10 @@ const jobTo = (p: Partial<Job>): R => {
 };
 
 const LIMIT_MESSAGES: Record<string, string> = {
-  preview_limit: "Бесплатное превью уже использовано",
-  active_jobs: "Предыдущее видео ещё создаётся — дождитесь его, чтобы начать новое",
-  global_jobs: "Сейчас создаётся много видео. Попробуйте через несколько минут",
-  daily_jobs: "На сегодня лимит видео исчерпан",
+  preview_limit: "The free preview has been used",
+  active_jobs: "Your previous video is still being made — wait for it before starting a new one",
+  global_jobs: "Many videos are being made right now. Try again in a few minutes",
+  daily_jobs: "You have reached today's video limit",
 };
 function limitFrom(message: string): LimitError | null {
   for (const code of Object.keys(LIMIT_MESSAGES))
@@ -202,7 +203,7 @@ export class SupabaseRepo implements Repo {
   }
   async deletePerson(userId: string, id: string) {
     const person = await this.getPerson(userId, id);
-    if (!person) throw new NotFoundError("Человек не найден");
+    if (!person) throw new NotFoundError("Person not found");
     const photos = check(await this.db.from("person_photos").select("storage_key").eq("user_id", userId).eq("person_id", id));
     const personPreviews = check(await this.db.from("previews").select("id, storage_key").eq("user_id", userId).eq("person_id", id));
     // scene previews of drafts where this person is cast
@@ -240,6 +241,7 @@ export class SupabaseRepo implements Repo {
         width: p.width,
         height: p.height,
         bytes: p.bytes,
+        analysis: p.analysis ?? null,
         created_at: p.createdAt,
       }),
     );
@@ -465,8 +467,8 @@ export class SupabaseRepo implements Repo {
     if (lockedBy) q = q.eq("locked_by", lockedBy);
     const rows = check(await q.select("*"));
     if (!rows || rows.length !== 1) {
-      if (lockedBy) throw new ConflictError("Задание обрабатывает другой обработчик");
-      throw new NotFoundError("Задание не найдено");
+      if (lockedBy) throw new ConflictError("Another worker holds this job");
+      throw new NotFoundError("Job not found");
     }
     return jobFrom(rows[0]);
   }
@@ -478,7 +480,7 @@ export class SupabaseRepo implements Repo {
     const j = await this.getJob(userId, id);
     if (!j) throw new NotFoundError();
     if ((ACTIVE_JOB_STATUSES as readonly string[]).includes(j.status))
-      throw new ConflictError("Видео ещё создаётся — удалить можно после завершения");
+      throw new ConflictError("The video is still being made — delete it when it is done");
     check(await this.db.from("video_jobs").delete().eq("user_id", userId).eq("id", id));
     return [j.resultKey, j.rawResultKey].filter((k): k is string => Boolean(k));
   }
@@ -508,6 +510,7 @@ export class SupabaseRepo implements Repo {
       price_is_example: o.priceIsExample,
       status: o.status,
       method: o.method,
+      billing_country: o.billingCountry ?? null,
     };
   }
   private orderFrom(r: R): Order {
@@ -522,6 +525,7 @@ export class SupabaseRepo implements Repo {
       priceIsExample: r.price_is_example,
       status: r.status,
       method: r.method,
+      billingCountry: undef(r.billing_country),
       createdAt: r.created_at,
       refundedAt: undef(r.refunded_at),
     };
@@ -541,6 +545,6 @@ export class SupabaseRepo implements Repo {
     return r ? this.orderFrom(r) : null;
   }
   async refundOrderForRef(refId: string) {
-    check(await this.db.from("purchases").update({ status: "refunded", refunded_at: new Date().toISOString() }).eq("ref_id", refId).eq("status", "test_paid"));
+    check(await this.db.from("purchases").update({ status: "refunded", refunded_at: new Date().toISOString() }).eq("ref_id", refId).in("status", ["test_paid", "paid"]));
   }
 }

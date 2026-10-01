@@ -1,29 +1,30 @@
 /**
  * Drafts: loading with reconciliation, mutations with optimistic versioning,
- * and the view the constructor renders (people, looks, previews, quotes).
+ * and the view the creation flow renders (people, looks, previews, quotes).
  */
 import { randomUUID } from "node:crypto";
 import { assignPerson, clearRole, defaultLook, DraftError, reconcile, rolesReady, sameDraftState, setLook, swapRoles, type PersonInputs } from "../../domain/draft";
-import type { Draft, Job, LookSettings, Person, Photo, Preview } from "../../domain/types";
-import { getTemplate, type TemplateDef } from "../../templates";
+import type { AppearancePrefs, Draft, Job, LookSettings, OutfitChoice, Person, Photo, Preview, ReplacementScope } from "../../domain/types";
+import { getMeme, type MemeDef } from "../../../memes";
 import { getImageProvider } from "../../providers/image";
-import { getVideoProvider, planVideoInputs, type InputPlan } from "../../providers/video";
+import { getVideoProvider, planVideoInputs, replacementScope, type InputPlan } from "../../providers/video";
+import type { BillingContext } from "../../commerce/billing";
 import { ConflictError, getRepo } from "../repo";
 import { previewQuote, videoPrice, type Quote } from "../pricing";
 import { UserError } from "./errors";
 
-export function templateOr404(id: string): TemplateDef {
-  const t = getTemplate(id);
-  if (!t) throw new UserError("not_found", "Мем не найден", 404);
+export function memeOr404(id: string): MemeDef {
+  const t = getMeme(id);
+  if (!t) throw new UserError("not_found", "Meme not found", 404);
   return t;
 }
 
 /**
  * Opens the user's unfinished draft of this meme, or starts a new one. With
- * `fromDraftId` («сделать ещё с теми же людьми») people are carried over in role order.
+ * `fromDraftId` ("make another with the same people") people carry over in role order.
  */
-export async function openDraft(userId: string, templateId: string, fromDraftId?: string): Promise<Draft> {
-  const t = templateOr404(templateId);
+export async function openDraft(userId: string, memeId: string, fromDraftId?: string): Promise<Draft> {
+  const t = memeOr404(memeId);
   const repo = getRepo();
   if (!fromDraftId) {
     const open = (await repo.listDrafts(userId)).find((d) => d.templateId === t.id && d.templateVersion === t.version && !d.lastJobId);
@@ -37,16 +38,16 @@ export async function openDraft(userId: string, templateId: string, fromDraftId?
     templateVersion: t.version,
     version: 1,
     assignments: {},
-    scene: { optionId: t.scene.defaultOption },
+    scene: { optionId: "default" },
     createdAt: now,
     updatedAt: now,
   };
   if (fromDraftId) {
     const prev = await repo.getDraft(userId, fromDraftId);
-    const prevT = prev ? getTemplate(prev.templateId) : undefined;
+    const prevT = prev ? getMeme(prev.templateId) : undefined;
     const people = (prevT?.roles ?? []).map((r) => prev!.assignments[r.id]?.personId).filter((x): x is string => Boolean(x));
     t.roles.forEach((r, i) => {
-      if (people[i]) draft.assignments[r.id] = { personId: people[i], look: defaultLook(t) };
+      if (people[i]) draft.assignments[r.id] = { personId: people[i], look: defaultLook(t, r.id) };
     });
   }
   return repo.createDraft(draft);
@@ -75,8 +76,8 @@ export async function loadDraft(userId: string, draftId: string) {
   const repo = getRepo();
   for (let attempt = 0; attempt < 3; attempt++) {
     const draft = await repo.getDraft(userId, draftId);
-    if (!draft) throw new UserError("not_found", "Черновик не найден", 404);
-    const t = templateOr404(draft.templateId);
+    if (!draft) throw new UserError("not_found", "Draft not found", 404);
+    const t = memeOr404(draft.templateId);
     const ctx = await context(userId, draft);
     const rec = reconcile(t, draft, ctx);
     if (!sameDraftState(draft, rec.draft)) {
@@ -96,22 +97,26 @@ export async function loadDraft(userId: string, draftId: string) {
 
 export interface DraftView {
   draft: Draft;
+  maxPhotos: number;
   roles: { roleId: string; person: (Person & { photos: Photo[] }) | null; look: LookSettings | null; ready: boolean }[];
   ready: boolean;
   inputsFingerprint: string;
   previews: Preview[];
   selectedPreviewId: string | null;
+  billing: BillingContext;
   quotes: { preview: Quote; video: Quote };
-  video: { preview: InputPlan; direct: InputPlan; isDemo: boolean; lastJob: Job | null };
+  video: { preview: InputPlan; direct: InputPlan; scope: ReplacementScope; isDemo: boolean; lastJob: Job | null };
 }
 
-export async function draftView(userId: string, draftId: string): Promise<DraftView> {
+export async function draftView(userId: string, draftId: string, billing: BillingContext): Promise<DraftView> {
   const repo = getRepo();
   const { t, draft, ctx, rec } = await loadDraft(userId, draftId);
   const vp = getVideoProvider();
+  const ip = getImageProvider();
   const lastJob = draft.lastJobId ? await repo.getJob(userId, draft.lastJobId) : null;
   return {
     draft,
+    maxPhotos: t.photos.maxPhotos,
     roles: t.roles.map((r) => {
       const a = draft.assignments[r.id];
       const p = a ? ctx.people.get(a.personId) : undefined;
@@ -119,18 +124,20 @@ export async function draftView(userId: string, draftId: string): Promise<DraftV
         roleId: r.id,
         person: p ? { ...p.person, photos: p.photos } : null,
         look: a?.look ?? null,
-        ready: Boolean(p && p.photos.length >= t.photoRequirements.minPhotos),
+        ready: Boolean(p && p.photos.length >= t.photos.minPhotos),
       };
     }),
     ready: rolesReady(t, draft, ctx.people),
     inputsFingerprint: rec.inputsFingerprint,
     previews: ctx.previewList,
     selectedPreviewId: draft.sceneSelectedPreviewId ?? null,
-    quotes: { preview: await previewQuote(userId), video: { free: false, price: videoPrice(t) } },
+    billing,
+    quotes: { preview: await previewQuote(userId, billing), video: { free: false, price: videoPrice(t, billing) } },
     video: {
       preview: planVideoInputs(t, vp.capabilities, "preview"),
-      direct: planVideoInputs(t, vp.capabilities, "direct"),
-      isDemo: vp.isDemo || getImageProvider().isDemo,
+      direct: planVideoInputs(t, vp.capabilities, "direct", ip),
+      scope: replacementScope(vp.capabilities, ip),
+      isDemo: vp.isDemo || ip.isDemo,
       lastJob,
     },
   };
@@ -140,7 +147,7 @@ export type DraftOp =
   | { op: "assign"; roleId: string; personId: string }
   | { op: "swap"; roleA: string; roleB: string }
   | { op: "clear"; roleId: string }
-  | { op: "look"; roleId: string; look: Partial<LookSettings> }
+  | { op: "look"; roleId: string; outfit?: OutfitChoice; appearance?: Partial<AppearancePrefs>; reroll?: boolean }
   | { op: "select"; previewId: string };
 
 /**
@@ -148,17 +155,17 @@ export type DraftOp =
  * if the draft moved on in the meantime, the client gets 409 and reloads.
  * Selecting an existing preview is free and never generates anything.
  */
-export async function mutateDraft(userId: string, draftId: string, expectedVersion: number, op: DraftOp): Promise<DraftView> {
+export async function mutateDraft(userId: string, draftId: string, expectedVersion: number, op: DraftOp, billing: BillingContext): Promise<DraftView> {
   const repo = getRepo();
   const { t, draft, ctx } = await loadDraft(userId, draftId);
-  // picking a variant is harmless to repeat, so a newer version (e.g. a preview just finished) does not block it
+  // picking a version is harmless to repeat, so a newer version (e.g. a preview just finished) does not block it
   if (draft.version !== expectedVersion && op.op !== "select") throw new ConflictError();
   let next: Draft;
   try {
     switch (op.op) {
       case "assign": {
         const person = await repo.getPerson(userId, op.personId);
-        if (!person) throw new UserError("not_found", "Человек не найден", 404);
+        if (!person) throw new UserError("not_found", "Person not found", 404);
         next = assignPerson(t, draft, op.roleId, op.personId);
         break;
       }
@@ -169,11 +176,11 @@ export async function mutateDraft(userId: string, draftId: string, expectedVersi
         next = clearRole(draft, op.roleId);
         break;
       case "look":
-        next = setLook(t, draft, op.roleId, op.look);
+        next = setLook(t, draft, op.roleId, { outfit: op.outfit, appearance: op.appearance, reroll: op.reroll });
         break;
       case "select": {
         const preview = ctx.previews.get(op.previewId);
-        if (!preview || preview.kind !== "scene" || preview.status !== "ready") throw new UserError("not_ready", "Этот вариант ещё не готов");
+        if (!preview || preview.kind !== "scene" || preview.status !== "ready") throw new UserError("not_ready", "This version is not ready yet");
         next = { ...structuredClone(draft), sceneSelectedPreviewId: preview.id };
         break;
       }
@@ -183,14 +190,14 @@ export async function mutateDraft(userId: string, draftId: string, expectedVersi
     throw e;
   }
   await repo.updateDraft({ ...next, version: draft.version + 1, updatedAt: new Date().toISOString() }, draft.version);
-  return draftView(userId, draftId);
+  return draftView(userId, draftId, billing);
 }
 
 export async function listDrafts(userId: string) {
   const drafts = await getRepo().listDrafts(userId);
   return drafts.map((d) => ({
     id: d.id,
-    templateId: d.templateId,
+    memeId: d.templateId,
     updatedAt: d.updatedAt,
     assigned: Object.values(d.assignments).filter(Boolean).length,
     lastJobId: d.lastJobId ?? null,

@@ -9,3 +9,4 @@ next-env.d.ts
 
 # the licensed source video of Hotel Lobby and everything cut from it (npm run media:import)
 /public/templates/hotel-lobby/
+/ui-shots/

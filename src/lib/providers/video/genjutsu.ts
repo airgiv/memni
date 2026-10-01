@@ -43,12 +43,14 @@ export class GenjutsuVideoProvider implements VideoProvider {
     maxReferenceImages: 8,
     needsPublicUrls: true,
     maxDurationSec: 30,
+    // motion transfer redraws the people from the images (unverified on real material)
+    replaces: "whole-person" as const,
   };
 
   constructor(private cfg: AppConfig["genjutsu"]) {}
 
   private async request(method: "GET" | "POST", url: string, body?: unknown) {
-    if (!this.cfg.apiKey) throw new VideoProviderError("config", "GENJUTSU_API_KEY не задан (формат KEY_ID:KEY_SECRET)");
+    if (!this.cfg.apiKey) throw new VideoProviderError("config", "GENJUTSU_API_KEY is not set (format KEY_ID:KEY_SECRET)");
     let res: Response;
     try {
       res = await fetch(url, {
@@ -58,7 +60,7 @@ export class GenjutsuVideoProvider implements VideoProvider {
         signal: AbortSignal.timeout(30_000),
       });
     } catch (e) {
-      throw new VideoProviderError((e as Error).name === "TimeoutError" ? "timeout" : "network", "Нет ответа от Genjutsu");
+      throw new VideoProviderError((e as Error).name === "TimeoutError" ? "timeout" : "network", "No answer from Genjutsu");
     }
     const json = (await res.json().catch(() => null)) as Record<string, unknown> | null;
     if (!res.ok || !json) throw new VideoProviderError(res.status >= 500 ? "network" : "rejected", `Genjutsu: HTTP ${res.status}`);
@@ -66,11 +68,11 @@ export class GenjutsuVideoProvider implements VideoProvider {
   }
 
   async submit(req: VideoSubmitRequest) {
-    if (!req.sourceVideoUrl) throw new VideoProviderError("unsupported", "Нужны публичные ссылки");
+    if (!req.sourceVideoUrl) throw new VideoProviderError("unsupported", "Public URLs are required");
     // scene image first (preview mode), then each person's photos, within the 8-image limit
     const people = req.peopleImageUrls.flatMap((urls) => urls.slice(0, req.mode === "preview" ? 1 : 3));
     const images = [...(req.sceneImageUrl ? [req.sceneImageUrl] : []), ...people].slice(0, this.capabilities.maxReferenceImages);
-    if (images.length === 0) throw new VideoProviderError("unsupported", "Нет изображений для видео");
+    if (images.length === 0) throw new VideoProviderError("unsupported", "No images for the video");
     const hook = req.callbackUrl ? `?hf_webhook=${encodeURIComponent(req.callbackUrl)}` : "";
     const json = await this.request("POST", `${this.cfg.baseUrl ?? BASE}/higgsfield/genjutsu/motion-transfer/v1.0${hook}`, {
       video_url: req.sourceVideoUrl,
@@ -78,7 +80,7 @@ export class GenjutsuVideoProvider implements VideoProvider {
       prompt: req.prompt,
       resolution: "720p",
     });
-    if (typeof json.request_id !== "string") throw new VideoProviderError("unknown", "Genjutsu не вернул request_id");
+    if (typeof json.request_id !== "string") throw new VideoProviderError("unknown", "Genjutsu returned no request_id");
     return { taskId: json.request_id };
   }
 
@@ -92,7 +94,7 @@ export class GenjutsuVideoProvider implements VideoProvider {
       case "completed":
         return { state: "succeeded", videoUrl: pickVideoUrl(j) };
       case "nsfw":
-        return { state: "failed", error: "Сервис отклонил материалы по правилам безопасности" };
+        return { state: "failed", error: "The service declined the material under its safety rules" };
       default:
         return { state: "failed", error: `Genjutsu: ${String(j.status)}` };
     }
@@ -103,9 +105,9 @@ export class GenjutsuVideoProvider implements VideoProvider {
   }
 
   async fetchResult(status: VideoStatus, _job: Job) {
-    if (!status.videoUrl) throw new VideoProviderError("unknown", "Не удалось найти ссылку на видео в ответе Genjutsu");
+    if (!status.videoUrl) throw new VideoProviderError("unknown", "Could not find the video URL in the Genjutsu response");
     const res = await fetch(status.videoUrl);
-    if (!res.ok) throw new VideoProviderError("network", `Не удалось скачать видео: HTTP ${res.status}`);
+    if (!res.ok) throw new VideoProviderError("network", `Could not download the video: HTTP ${res.status}`);
     return Buffer.from(await res.arrayBuffer());
   }
 
