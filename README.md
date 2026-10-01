@@ -10,13 +10,25 @@ Stack: Next.js 16 (App Router, static generation for landing pages), React 19, T
 
 ```bash
 npm install
-npm run media:import -- /path/to/videoplayback_3.mp4   # once: the licensed clip is not in git
-npm run dev                                            # http://localhost:3000 → /en
+npm run media:import -- /path/to/horizontal.mp4 /path/to/vertical.mp4   # once: the licensed clips are not in git
+npm run dev                                                           # http://localhost:3000 → /en
 ```
 
-`media:import` cuts the fragment 60.5–70.5 s into `public/templates/hotel-lobby/` (gitignored): the landing video (MP4 + WebM), the motion source, the original audio, the reference frame, a 3:4 cutout and a round face crop per participant.
+`media:import` cuts the fragment 14.04–29.04 s of the horizontal COLORS upload into `.media/hotel-lobby/` (gitignored, served at `/media/hotel-lobby/…`): the landing video (MP4 + WebM), the motion source, the original audio, the reference frame, a 3:4 cutout and a round face crop per participant. The optional vertical edit (it starts 14.04 s into the horizontal one — found by audio cross-correlation) becomes the phone background for the same fragment.
 
-Production: `npm run build && npm start` plus `npm run worker` (separate process). Node.js ≥ 22.13.
+Production: `npm run build && node scripts/start.mjs` (site + worker in one process group). Node.js ≥ 22.13.
+
+## Deploy on Railway
+
+The repo has a `Dockerfile` and `railway.json`: one container runs the site and the worker; state lives on a volume.
+
+1. New Project → Deploy from GitHub → this repo (branch `claude/focused-bardeen-4pvukk`).
+2. Service → Settings → **Volumes**: add a volume mounted at `/data` (SQLite, uploads, results, imported media).
+3. Service → **Variables**: `ADMIN_TOKEN` (any long secret), optionally `APP_URL` (otherwise the Railway domain is used).
+4. Settings → Networking → **Generate Domain**.
+5. Open `https://<domain>/admin/media`, enter the token, upload the horizontal and vertical videos once. The import runs on the server (1–3 min); the landing picks it up immediately.
+
+The licensed clip never goes into git: the repository is public.
 
 Checks:
 

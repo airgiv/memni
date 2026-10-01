@@ -8,7 +8,6 @@ import { notFound } from "next/navigation";
 import { MemeEditorial } from "@/components/meme/MemeEditorial";
 import { MemeExperience } from "@/components/meme/MemeExperience";
 import { getMessages, LOCALES, localeFromSegment, type LocaleCode } from "@/i18n";
-import { mediaReady } from "@/lib/server/media-ready";
 import { abs, hreflang, memeAlternates, suggestionTexts } from "@/lib/site";
 import { findMemeBySlug, memeContent, memeLocales, MEMES } from "@/memes";
 import { clientMeme } from "@/memes/client";
@@ -86,7 +85,6 @@ export default async function MemePage({ params }: PageProps<"/[locale]/memes/[s
         meme={clientMeme(meme, content, locale)}
         alternates={alternates}
         suggestions={suggestionTexts(alternates)}
-        mediaReady={mediaReady(meme)}
         catalogHref={`/${LOCALES[locale].segment}`}
       >
         <MemeEditorial content={content} sources={meme.sources} m={m} localeTag={LOCALES[locale].tag} />

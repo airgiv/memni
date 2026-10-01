@@ -53,7 +53,7 @@ export const en: MemeContent = {
       heading: "The music",
       paragraphs: [
         "“HOTEL LOBBY (Unc & Phew)” was released on May 20, 2022, as the debut single of Unc & Phew. It was produced by Murda Beatz, Keanu Beats and Fabio Aguilar, and appears on the duo’s only studio album, Only Built for Infinity Links, released on October 7, 2022 by Quality Control Music and Motown.",
-        "In Мемме, the original audio of the ten-second fragment is attached to your video exactly as it is. The video model never recreates the song.",
+        "In Мемме, the original audio of the 15-second fragment is attached to your video exactly as it is. The video model never recreates the song.",
       ],
       sources: ["wiki-song", "wiki-album"],
     },

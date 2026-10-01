@@ -1,21 +1,26 @@
 /**
  * Hotel Lobby — built on the real source video supplied by the product owner.
  * The licensed file is not committed: `npm run media:import -- <file>` cuts
- * the fragment below into public/templates/hotel-lobby/ (gitignored) together
+ * the fragment below into MEDIA_DIR/hotel-lobby (served at /media/hotel-lobby) together
  * with the reference frame, the portrait cutouts and the face crops.
  */
 import type { MemeDef } from "../types";
 import { en } from "./content.en";
 import { ru } from "./content.ru";
 
-/** Seconds inside the original upload: one continuous shot with both performers. */
-export const HOTEL_LOBBY_FRAGMENT = { startSec: 60.5, endSec: 70.5 };
+/** Seconds inside the original COLORS upload (1280×720): wide shot, then medium shots of both performers. */
+export const HOTEL_LOBBY_FRAGMENT = { startSec: 14.04, endSec: 29.04 };
+/**
+ * The vertical 9:16 edit starts 14.04 s into the horizontal upload (found by
+ * audio cross-correlation), so the same fragment begins at its 0.0 s.
+ */
+export const HOTEL_LOBBY_MOBILE_OFFSET = 14.04;
 
-const BASE = "/templates/hotel-lobby";
+const BASE = "/media/hotel-lobby";
 
 export const hotelLobby: MemeDef = {
   id: "hotel-lobby",
-  version: 3,
+  version: 4,
   defaultLocale: "en",
   markets: ["global"],
   content: { en, ru },
@@ -50,37 +55,42 @@ export const hotelLobby: MemeDef = {
     },
   ],
 
-  durationSec: 10,
+  durationSec: 15,
   aspectRatio: "16:9",
   media: {
     video: { src: `${BASE}/example.mp4`, webm: `${BASE}/example.webm` },
-    poster: { src: `${BASE}/frame.jpg`, width: 640, height: 360 },
-    source: { src: `${BASE}/source.mp4`, startSec: 0, endSec: 10 },
-    audio: { src: `${BASE}/audio.m4a`, startSec: 0, endSec: 10 },
-    referenceFrame: { src: `${BASE}/frame.jpg`, width: 640, height: 360, atSec: 4.5 },
+    poster: { src: `${BASE}/frame.jpg`, width: 1280, height: 720 },
+    source: { src: `${BASE}/source.mp4`, startSec: 0, endSec: 15 },
+    audio: { src: `${BASE}/audio.m4a`, startSec: 0, endSec: 15 },
+    referenceFrame: { src: `${BASE}/frame.jpg`, width: 1280, height: 720, atSec: 6 },
     // the microphone sits between the two performers
-    focal: { mobile: { x: 0.53, y: 0.4 }, desktop: { x: 0.5, y: 0.45 } },
+    focal: { mobile: { x: 0.54, y: 0.4 }, desktop: { x: 0.5, y: 0.45 } },
+    mobile: {
+      video: { src: `${BASE}/mobile.mp4`, webm: `${BASE}/mobile.webm` },
+      poster: { src: `${BASE}/mobile.jpg`, width: 720, height: 1280 },
+      focal: { x: 0.5, y: 0.4 },
+    },
     placeholder: false,
   },
-  mediaNote: "Source: the product owner's upload, fragment 60.5–70.5 s. Import: npm run media:import -- <file>.",
+  mediaNote: "Source: the product owner's upload of the COLORS performance, fragment 14.04–29.04 s, plus its vertical edit for phones. Import: npm run media:import -- <horizontal.mp4> [<vertical.mp4>].",
 
   roles: [
     {
       id: "left",
-      region: { x: 0.12, y: 0.04, w: 0.36, h: 0.96 },
-      face: { src: `${BASE}/faces/left.jpg`, region: { x: 0.33, y: 0.16, w: 0.17, h: 0.3 } },
-      cutout: { src: `${BASE}/roles/left.jpg`, atSec: 4.5 },
-      focal: { x: 0.36, y: 0.4 },
+      region: { x: 0.2, y: 0.12, w: 0.3, h: 0.88 },
+      face: { src: `${BASE}/faces/left.jpg`, region: { x: 0.3, y: 0.08, w: 0.2, h: 0.36 } },
+      cutout: { src: `${BASE}/roles/left.jpg`, atSec: 6 },
+      focal: { x: 0.38, y: 0.4 },
       outfits: ["original", "photos", "random", "bathrobe", "suit", "tracksuit", "custom"],
       defaultOutfit: "original",
       prompt: "the performer on the LEFT, wearing white sunglasses and a striped short-sleeve shirt, next to the hanging studio microphone",
     },
     {
       id: "right",
-      region: { x: 0.52, y: 0.04, w: 0.36, h: 0.96 },
-      face: { src: `${BASE}/faces/right.jpg`, region: { x: 0.585, y: 0.07, w: 0.17, h: 0.3 } },
-      cutout: { src: `${BASE}/roles/right.jpg`, atSec: 4.5 },
-      focal: { x: 0.68, y: 0.4 },
+      region: { x: 0.58, y: 0.12, w: 0.34, h: 0.88 },
+      face: { src: `${BASE}/faces/right.jpg`, region: { x: 0.66, y: 0.075, w: 0.2, h: 0.36 } },
+      cutout: { src: `${BASE}/roles/right.jpg`, atSec: 6 },
+      focal: { x: 0.75, y: 0.4 },
       outfits: ["original", "photos", "random", "bathrobe", "suit", "tracksuit", "custom"],
       defaultOutfit: "original",
       prompt: "the performer on the RIGHT, wearing dark sunglasses and an orange knit short-sleeve shirt",
@@ -105,7 +115,7 @@ export const hotelLobby: MemeDef = {
   photos: { minPhotos: 1, maxPhotos: 3, minSidePx: 512, acceptedTypes: ["image/jpeg", "image/png", "image/webp"] },
 
   generation: {
-    promptVersion: "hotel-lobby/2026-10-a",
+    promptVersion: "hotel-lobby/2026-10-b",
     prompts: {
       scene:
         "Keep the flat orange studio backdrop, the single microphone hanging from the ceiling, the soft even lighting, the camera angle, the framing and both poses exactly as in the reference frame.",

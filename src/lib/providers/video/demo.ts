@@ -13,6 +13,7 @@ import sharp from "sharp";
 import type { Job } from "../../domain/types";
 import { getStorage } from "../../server/storage";
 import { ffprobeBin, runFfmpeg } from "../../server/media";
+import { mediaFile } from "../../server/media-files";
 import type { VideoProvider, VideoStatus, VideoSubmitRequest } from "./types";
 
 async function probeSize(file: string): Promise<{ width: number; height: number } | null> {
@@ -76,7 +77,7 @@ export class DemoVideoProvider implements VideoProvider {
           .jpeg()
           .toFile(inset);
       }
-      const src = join(process.cwd(), "public", job.input.sourceVideo.src);
+      const src = mediaFile(job.input.sourceVideo.src);
       const badge = join(process.cwd(), "public", "demo", "badge-video.png");
       const out = join(dir, "raw.mp4");
       // sizes follow the source frame (the real Hotel Lobby clip is 640×360)

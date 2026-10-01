@@ -243,7 +243,7 @@ async function main() {
   assert.match(dl.headers.get("content-disposition") ?? "", /attachment/);
   await writeFile(file, Buffer.from(await dl.arrayBuffer()));
   let meta = await probe(file);
-  assert.ok(meta.hasAudio && Math.abs(meta.durationSec - 10) < 0.2, JSON.stringify(meta));
+  assert.ok(meta.hasAudio && Math.abs(meta.durationSec - 15) < 0.2, JSON.stringify(meta));
   ok(`path A result: ${meta.durationSec.toFixed(2)} s with the original audio (ffprobe); test purchase recorded once`);
 
   // path B: straight to video, no preview used, no hidden picture
@@ -258,7 +258,7 @@ async function main() {
   const file2 = join(await mkdtemp(join(tmpdir(), "memme-e2e-")), "b.mp4");
   await writeFile(file2, Buffer.from(await (await a.req(`/api/files/job/${v2.job.id}`)).arrayBuffer()));
   meta = await probe(file2);
-  assert.ok(meta.hasAudio && Math.abs(meta.durationSec - 10) < 0.2);
+  assert.ok(meta.hasAudio && Math.abs(meta.durationSec - 15) < 0.2);
   assert.equal((await a.req(`/api/files/jobscene/${v2.job.id}`)).status, 404, "direct job has no scene image");
   ok("path B (straight to video): one job, no hidden preview, original audio present");
 

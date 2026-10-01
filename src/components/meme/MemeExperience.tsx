@@ -66,14 +66,12 @@ export function MemeExperience({
   meme,
   alternates,
   suggestions,
-  mediaReady,
   catalogHref,
   children,
 }: {
   meme: ClientMeme;
   alternates: Partial<Record<LocaleCode, string>>;
   suggestions: Partial<Record<LocaleCode, SuggestionText>>;
-  mediaReady: boolean;
   catalogHref: string;
   children: React.ReactNode;
 }) {
@@ -113,6 +111,12 @@ export function MemeExperience({
     writeNav(next, push);
     setNavState(next);
   }, []);
+
+  // pages are static; whether the licensed media are imported on this server is asked at runtime
+  const [mediaReady, setMediaReady] = useState(true);
+  useEffect(() => {
+    api<{ ready: boolean }>(`/api/media/status?meme=${meme.id}`).then((r) => setMediaReady(r.ready), () => undefined);
+  }, [meme.id]);
 
   const { draft, error: draftError, reload, mutate } = useDraft(nav.d);
 
@@ -371,6 +375,7 @@ export function MemeExperience({
       <VideoStage
         src={stageSrc}
         webm={resultReady ? null : meme.media.videoWebm}
+        vertical={resultReady ? null : meme.media.mobile}
         poster={meme.media.poster}
         media={{ w: meme.media.width, h: meme.media.height }}
         focal={focal}

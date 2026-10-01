@@ -12,14 +12,12 @@ import { createRequire } from "node:module";
 
 const req = createRequire(import.meta.url);
 
-function binary(envName: string, pkg: string): string {
-  const fromEnv = process.env[envName];
-  if (fromEnv) return fromEnv;
-  const mod = req(pkg) as string | { path: string };
-  return typeof mod === "string" ? mod : mod.path;
+// literal module names: bundlers (the Next server for /admin/media) cannot follow a dynamic require
+function pathOf(mod: unknown): string {
+  return typeof mod === "string" ? mod : (mod as { path: string }).path;
 }
-export const ffmpegBin = () => binary("FFMPEG_PATH", "ffmpeg-static");
-export const ffprobeBin = () => binary("FFPROBE_PATH", "ffprobe-static");
+export const ffmpegBin = () => process.env.FFMPEG_PATH || pathOf(req("ffmpeg-static"));
+export const ffprobeBin = () => process.env.FFPROBE_PATH || pathOf(req("ffprobe-static"));
 
 function exec(bin: string, args: string[], timeoutMs = 180_000): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -30,8 +28,8 @@ function exec(bin: string, args: string[], timeoutMs = 180_000): Promise<string>
   });
 }
 
-export function runFfmpeg(args: string[]) {
-  return exec(ffmpegBin(), ["-y", "-loglevel", "error", ...args]);
+export function runFfmpeg(args: string[], timeoutMs = 180_000) {
+  return exec(ffmpegBin(), ["-y", "-loglevel", "error", ...args], timeoutMs);
 }
 
 export interface Probe {

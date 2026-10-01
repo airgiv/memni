@@ -293,8 +293,8 @@ const sheetState = (page) =>
   await page.getByText("You’re replacing").waitFor();
   const cur = () => page.evaluate(() => [...document.querySelectorAll('nav [aria-current="step"]')].map((e) => e.getAttribute("aria-label")));
   check("flow: first participant is current (aria-current=step), no 'Step 1 of 2' text", (await cur())[0]?.startsWith("Left") && !/step \d+ of/i.test(await page.evaluate(() => document.body.innerText)), await cur());
-  const spot = await page.evaluate(() => document.querySelector("video").style.objectPosition);
-  check("flow: the video stays behind the widget and centres on this participant", spot && !spot.startsWith("0px 0px"), spot);
+  const bg = await page.evaluate(() => ({ src: document.querySelector("video").currentSrc, pos: document.querySelector("video").style.objectPosition }));
+  check("flow: the video stays behind the widget (phones: the vertical edit)", bg.src.includes("/mobile."), bg);
   await shot(page, "f-p1-empty");
 
   // upload validation
@@ -412,7 +412,7 @@ const sheetState = (page) =>
   // video from the approved preview — double click on Pay creates one job
   await page.getByRole("button", { name: "Создать видео", exact: true }).click();
   const vd = await page.getByRole("dialog").innerText();
-  check("purchase: video price shown before paying", /\$4[.,]99|4[.,]99\s?\$/.test(vd) && /Одно видео на 10 секунд/.test(vd), vd.replace(/\n/g, " | "));
+  check("purchase: video price shown before paying", /\$4[.,]99|4[.,]99\s?\$/.test(vd) && /Одно видео на 15 секунд/.test(vd), vd.replace(/\n/g, " | "));
   await page.getByRole("button", { name: /^Оплатить/ }).dblclick();
   await page.getByText("Готовим").waitFor({ timeout: 20000 });
   await sleep(1200);

@@ -1,0 +1,10 @@
+node_modules
+.next
+.data
+.git
+ui-shots
+public/templates/hotel-lobby
+*.log
+.env*
+!.env.example
+.media

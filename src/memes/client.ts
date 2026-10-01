@@ -21,6 +21,9 @@ export function clientMeme(m: MemeDef, content: MemeContent, locale: LocaleCode)
       width: m.media.poster.width,
       height: m.media.poster.height,
       focal: m.media.focal,
+      mobile: m.media.mobile
+        ? { video: m.media.mobile.video.src, webm: m.media.mobile.video.webm ?? null, poster: m.media.mobile.poster.src, width: m.media.mobile.poster.width, height: m.media.mobile.poster.height, focal: m.media.mobile.focal }
+        : null,
       placeholder: m.media.placeholder,
     },
     roles: m.roles.map((r) => ({

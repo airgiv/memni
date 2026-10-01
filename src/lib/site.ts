@@ -3,7 +3,8 @@ import { DEFAULT_LOCALE, LOCALES, PUBLISHED_LOCALES, getMessages, type LocaleCod
 import { memeLocales, memePath, type MemeDef } from "@/memes";
 
 export function siteUrl(): string {
-  return (process.env.APP_URL ?? "http://localhost:3000").replace(/\/$/, "");
+  const railway = process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : undefined;
+  return (process.env.APP_URL ?? railway ?? "http://localhost:3000").replace(/\/$/, "");
 }
 
 export function abs(path: string): string {

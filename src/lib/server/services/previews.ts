@@ -23,6 +23,7 @@ import { getVideoProvider, replacementScope } from "../../providers/video";
 import type { MemeDef } from "../../../memes";
 import { ConflictError, getRepo, LimitError } from "../repo";
 import { getStorage, keys } from "../storage";
+import { mediaFile } from "../media-files";
 import { acceptedPriceMatches, chargeOrder, previewQuote, refundFor, type Quote } from "../pricing";
 import { loadDraft } from "./drafts";
 import { UserError } from "./errors";
@@ -38,7 +39,7 @@ export async function referenceFrame(t: MemeDef): Promise<ImageRef> {
     const res = await fetch(src);
     return { bytes: Buffer.from(await res.arrayBuffer()), mime: res.headers.get("content-type") ?? "image/jpeg" };
   }
-  return { bytes: await readFile(join(process.cwd(), "public", src)), mime: "image/jpeg" };
+  return { bytes: await readFile(mediaFile(src)), mime: "image/jpeg" };
 }
 
 export async function readRef(key: string): Promise<ImageRef> {

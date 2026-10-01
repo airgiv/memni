@@ -4,7 +4,6 @@ import { notFound } from "next/navigation";
 import { CatalogView, type CatalogItem } from "@/components/CatalogView";
 import { SiteHeader } from "@/components/SiteHeader";
 import { getMessages, LOCALES, localeFromSegment } from "@/i18n";
-import { mediaReady } from "@/lib/server/media-ready";
 import { abs, catalogAlternates, hreflang } from "@/lib/site";
 import { anyContent, memeContent, memeLocales, memePath, MEMES } from "@/memes";
 
@@ -41,7 +40,6 @@ export default async function CatalogPage({ params }: PageProps<"/[locale]">) {
       languages: memeLocales(meme),
       shownIn,
       markets: meme.markets,
-      ready: mediaReady(meme),
     };
   }).filter((i) => i.languages.length > 0);
 

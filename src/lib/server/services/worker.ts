@@ -27,6 +27,7 @@ import { referenceFrame, readRef } from "./previews";
 import { assembleWithOriginalAudio, AssemblyCheckError, DurationMismatchError, runFfmpeg } from "../media";
 import { getRepo } from "../repo";
 import { getStorage, keys } from "../storage";
+import { mediaFile } from "../media-files";
 import { isTerminalFailure } from "./jobs";
 import { refundFor } from "../pricing";
 
@@ -221,7 +222,7 @@ async function localOrDownload(src: string, dir: string, name: string): Promise<
     await writeFile(p, Buffer.from(await res.arrayBuffer()));
     return p;
   }
-  return join(process.cwd(), "public", src);
+  return mediaFile(src);
 }
 
 async function assemble(job: Job, provider: VideoProvider, save: Save, known?: VideoStatus): Promise<Job> {

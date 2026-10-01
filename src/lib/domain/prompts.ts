@@ -13,7 +13,7 @@
 import type { MemeDef, MemeRole } from "../../memes/types";
 import type { GenerationSpec, LookSettings, Photo, ReplacementScope } from "./types";
 
-export const PROMPT_VERSIONS = ["hotel-lobby/2026-10-a", "generic/2026-10-a"] as const;
+export const PROMPT_VERSIONS = ["hotel-lobby/2026-10-b", "generic/2026-10-a"] as const;
 
 export interface SpecPerson {
   role: MemeRole;

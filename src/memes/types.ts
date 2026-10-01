@@ -150,6 +150,11 @@ export interface MemeDef {
     referenceFrame: MediaRef & { width: number; height: number; atSec: number };
     /** Where the stage centres the video on phones and on desktop */
     focal: { mobile: FocalPoint; desktop: FocalPoint };
+    /**
+     * Optional vertical edit of the same moment for phones in portrait (landing
+     * background only — roles, prompts and the pipeline use the main video).
+     */
+    mobile?: { video: MediaRef & { webm?: string }; poster: MediaRef & { width: number; height: number }; focal: FocalPoint };
     /** true → media are drawn placeholders, the UI says so */
     placeholder: boolean;
   };

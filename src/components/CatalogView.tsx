@@ -19,7 +19,6 @@ export interface CatalogItem {
   languages: LocaleCode[];
   shownIn: LocaleCode;
   markets: string[];
-  ready: boolean;
 }
 
 export function CatalogView({ items }: { items: CatalogItem[] }) {
@@ -80,7 +79,6 @@ export function CatalogView({ items }: { items: CatalogItem[] }) {
                 <div className="relative aspect-[4/5] overflow-hidden rounded-t-2xl bg-black">
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img src={i.poster} alt="" className="size-full object-cover" style={{ objectPosition: `${i.focal.x * 100}% ${i.focal.y * 100}%` }} loading="lazy" />
-                  {!i.ready && <span className="absolute inset-x-2 bottom-2 rounded-lg bg-black/70 px-2 py-1 text-center text-[12px] text-fg-2">{m.catalog.notConnected}</span>}
                 </div>
                 <div className="p-3">
                   <h2 className="truncate text-[15px] font-semibold">{i.title}</h2>

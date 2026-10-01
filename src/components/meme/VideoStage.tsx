@@ -7,11 +7,23 @@
  */
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { Pause, Play, Volume2, VolumeX } from "lucide-react";
-import { useReducedMotion, useSize } from "@/client/hooks";
+import { useMediaQuery, useReducedMotion, useSize } from "@/client/hooks";
 import { coverBox } from "@/client/cover";
 import { useI18n } from "@/i18n/client";
 import type { FocalPoint, Region } from "@/memes/types";
 import { IconButton } from "@/ui/button";
+
+/** Phones in portrait get the vertical edit when a meme has one. */
+export const PORTRAIT_MQ = "(max-width: 1023px) and (orientation: portrait)";
+
+export interface VerticalMedia {
+  video: string;
+  webm: string | null;
+  poster: string;
+  width: number;
+  height: number;
+  focal: FocalPoint;
+}
 
 export interface StageHandle {
   play(): void;
@@ -25,6 +37,8 @@ export const VideoStage = forwardRef<
     webm?: string | null;
     poster: string;
     media: { w: number; h: number };
+    /** vertical edit for phones; the browser picks it via <source media>, so nothing is downloaded twice */
+    vertical?: VerticalMedia | null;
     focal: FocalPoint;
     /** region of the reference frame to spotlight (participant being edited) */
     spotlight?: Region | null;
@@ -32,14 +46,22 @@ export const VideoStage = forwardRef<
     badge?: string | null;
     missingText?: string | null;
   }
->(function VideoStage({ src, webm, poster, media, focal, spotlight, dimmed, badge, missingText }, ref) {
+>(function VideoStage({ src, webm, poster, media, focal, vertical, spotlight, dimmed, badge, missingText }, ref) {
   const { m } = useI18n();
   const reduced = useReducedMotion();
   const video = useRef<HTMLVideoElement>(null);
   const [box, size] = useSize<HTMLDivElement>();
   const [muted, setMuted] = useState(true);
   const [paused, setPaused] = useState(false);
-  const cover = coverBox(size, media, focal);
+  const portrait = useMediaQuery(PORTRAIT_MQ);
+  // the real size of what the browser chose to play; a guess until metadata arrives
+  const [loaded, setLoaded] = useState<{ w: number; h: number } | null>(null);
+  useEffect(() => setLoaded(null), [src]);
+  const dims = loaded ?? (vertical && portrait ? { w: vertical.width, h: vertical.height } : media);
+  const isVertical = Boolean(vertical) && dims.h > dims.w;
+  // roles are marked on the main (horizontal) video: on the vertical edit just keep it centred
+  const cover = coverBox(size, dims, isVertical ? vertical!.focal : focal);
+  if (isVertical) spotlight = null;
 
   useImperativeHandle(ref, () => ({ play: () => void video.current?.play().catch(() => undefined) }));
 
@@ -76,28 +98,33 @@ export const VideoStage = forwardRef<
 
   return (
     <div ref={box} className="fixed inset-0 overflow-hidden bg-black">
-      {src ? (
+      {/* poster under the video: the vertical one on phones in portrait */}
+      <picture>
+        {vertical && <source media={PORTRAIT_MQ} srcSet={vertical.poster} />}
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={poster} alt="" className="absolute inset-0 size-full object-cover" style={{ objectPosition: `${cover.x}px ${cover.y}px` }} />
+      </picture>
+      {src && (
         <video
           ref={video}
           key={src}
-          poster={poster}
           muted={muted}
           loop
           playsInline
           preload="auto"
+          onLoadedMetadata={(e) => setLoaded({ w: e.currentTarget.videoWidth, h: e.currentTarget.videoHeight })}
           onPlay={() => setPaused(false)}
           onPause={() => setPaused(true)}
           className="absolute inset-0 size-full object-cover transition-[object-position] duration-700 ease-[var(--ease-sheet)] motion-reduce:transition-none"
           style={{ objectPosition: `${cover.x}px ${cover.y}px` }}
         >
+          {vertical && <source src={vertical.video} media={PORTRAIT_MQ} type={'video/mp4; codecs="avc1.4D401E, mp4a.40.2"'} />}
+          {vertical?.webm && <source src={vertical.webm} media={PORTRAIT_MQ} type={'video/webm; codecs="vp9, opus"'} />}
           <source src={src} type={'video/mp4; codecs="avc1.4D401E, mp4a.40.2"'} />
           {webm && <source src={webm} type={'video/webm; codecs="vp9, opus"'} />}
           {/* last resort: let the browser try the MP4 without a codec hint */}
           <source src={src} />
         </video>
-      ) : (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img src={poster} alt="" className="absolute inset-0 size-full object-cover" style={{ objectPosition: `${cover.x}px ${cover.y}px` }} />
       )}
 
       {/* participant spotlight: everything else gently darkened */}
